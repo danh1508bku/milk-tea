@@ -46,8 +46,16 @@ async function startApp() {
     await bot.setWebHook(`${webhookUrl}${webhookPath}`);
 
     app.post(webhookPath, (req, res) => {
-      bot.processUpdate(req.body);
       res.sendStatus(200);
+
+      // Acknowledge Telegram immediately, then process update in background.
+      setImmediate(async () => {
+        try {
+          await bot.processUpdate(req.body);
+        } catch (error) {
+          console.error("Failed to process Telegram update:", error);
+        }
+      });
     });
   }
 
