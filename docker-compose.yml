@@ -1,0 +1,22 @@
+services:
+  app:
+    build: .
+    container_name: milktea-app
+    restart: always
+    env_file:
+      - .env
+    depends_on:
+      - redis
+    ports:
+      - "127.0.0.1:3000:3000"
+
+  redis:
+    image: redis:7
+    container_name: milktea-redis
+    restart: always
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+
+volumes:
+  redis-data:
