@@ -23,6 +23,85 @@ function getMainKeyboard() {
   };
 }
 
+function getAdminKeyboard() {
+  return {
+    reply_markup: {
+      keyboard: [
+        ["Xem đơn hàng", "Xem menu admin"],
+        ["Hướng dẫn admin"],
+      ],
+      resize_keyboard: true,
+    },
+  };
+}
+
+function splitPipeArgs(raw) {
+  return String(raw || "")
+    .split("|")
+    .map((part) => part.trim());
+}
+
+function parseMenuAddArgs(raw) {
+  const parts = splitPipeArgs(raw);
+  if (parts.length < 5) {
+    return { ok: false, error: "Sai cu phap. Dung: /menuadd <item_id>|<ten>|<category>|<price_m>|<price_l>|<available>|<description>" };
+  }
+
+  const [itemId, name, category, priceM, priceL, available = "true", ...descriptionParts] = parts;
+  return {
+    ok: true,
+    payload: {
+      itemId,
+      name,
+      category,
+      priceM,
+      priceL,
+      available,
+      description: descriptionParts.join(" | "),
+    },
+  };
+}
+
+function parseMenuEditArgs(raw) {
+  const parts = splitPipeArgs(raw);
+  if (parts.length < 2) {
+    return { ok: false, error: "Sai cu phap. Dung: /menuedit <item_id>|field=value|field=value" };
+  }
+
+  const itemId = parts[0];
+  const updates = {};
+  const fieldMap = {
+    name: "name",
+    category: "category",
+    description: "description",
+    price_m: "priceM",
+    price_l: "priceL",
+    available: "available",
+  };
+
+  for (const pair of parts.slice(1)) {
+    const eqIndex = pair.indexOf("=");
+    if (eqIndex <= 0) {
+      return { ok: false, error: `Cap nhat khong hop le: ${pair}` };
+    }
+
+    const rawField = pair.slice(0, eqIndex).trim().toLowerCase();
+    const rawValue = pair.slice(eqIndex + 1).trim();
+    const mapped = fieldMap[rawField];
+    if (!mapped) {
+      return { ok: false, error: `Field khong duoc ho tro: ${rawField}` };
+    }
+
+    updates[mapped] = rawValue;
+  }
+
+  if (Object.keys(updates).length === 0) {
+    return { ok: false, error: "Khong co field nao de cap nhat." };
+  }
+
+  return { ok: true, itemId, updates };
+}
+
 function getModeInlineKeyboard() {
   return {
     reply_markup: {
@@ -81,6 +160,10 @@ function setupBotHandlers(bot, services) {
 
   function canManageOrder(chatId, order) {
     return String(order.chatId) === String(chatId) || isAdminChat(chatId);
+  }
+
+  function getKeyboardByRole(chatId) {
+    return isAdminChat(chatId) ? getAdminKeyboard() : getMainKeyboard();
   }
 
   function safe(handler) {
@@ -259,6 +342,41 @@ function setupBotHandlers(bot, services) {
 
   async function sendModePicker(chatId, title = "Chọn mode hoạt động:") {
     await bot.sendMessage(chatId, title, getModeInlineKeyboard());
+  }
+
+  async function sendAdminHelp(chatId) {
+    await bot.sendMessage(
+      chatId,
+      [
+        "Lenh admin:",
+        "/orders - Xem danh sach don",
+        "/order <orderCode> - Xem chi tiet don",
+        "/delivered <orderCode> - Xac nhan da giao",
+        "/menuadmin - Xem menu hien tai",
+        "/menuadd <item_id>|<ten>|<category>|<price_m>|<price_l>|<available>|<description>",
+        "/menuedit <item_id>|field=value|field=value",
+        "/menudelete <item_id>",
+        "",
+        "Field cho /menuedit: name, category, description, price_m, price_l, available",
+        "Category hop le: Trà Sữa, Trà Trái Cây, Cà Phê, Đá Xay, Topping",
+      ].join("\n"),
+      getAdminKeyboard()
+    );
+  }
+
+  async function sendAdminMenu(chatId) {
+    const items = menuService.getMenu();
+    if (!items.length) {
+      await bot.sendMessage(chatId, "Menu dang trong.", getAdminKeyboard());
+      return;
+    }
+
+    const lines = items.map((item) => {
+      const active = item.available ? "ON" : "OFF";
+      return `${item.itemId} | ${item.name} | ${item.category} | M:${item.priceM} L:${item.priceL} | ${active}`;
+    });
+
+    await bot.sendMessage(chatId, ["MENU HIEN TAI:", ...lines].join("\n"), getAdminKeyboard());
   }
 
   async function sendListMenu(chatId) {
@@ -686,7 +804,22 @@ function setupBotHandlers(bot, services) {
 
   bot.onText(/^\/start$/i, safe(async (msg) => {
     logCommand(msg.chat.id, "/start");
+    const isAdmin = isAdminChat(msg.chat.id);
     const mode = getChatMode(msg.chat.id);
+
+    if (isAdmin) {
+      await bot.sendMessage(
+        msg.chat.id,
+        [
+          "Chao admin.",
+          "Ban dang o giao dien quan ly don/menu.",
+          "Nhan 'Huong dan admin' hoac dung /help de xem lenh.",
+        ].join("\n"),
+        getAdminKeyboard()
+      );
+      return;
+    }
+
     await bot.sendMessage(
       msg.chat.id,
       [
@@ -696,7 +829,7 @@ function setupBotHandlers(bot, services) {
         "- AI: nhap ngon ngu tu nhien de bot parse",
         "Bam nut Chon mode ben duoi hoac dung /mode list, /mode ai.",
       ].join("\n"),
-      getMainKeyboard()
+      getKeyboardByRole(msg.chat.id)
     );
 
     await sendModePicker(msg.chat.id);
@@ -704,6 +837,11 @@ function setupBotHandlers(bot, services) {
 
   bot.onText(/^\/help$/i, safe(async (msg) => {
     logCommand(msg.chat.id, "/help");
+    if (isAdminChat(msg.chat.id)) {
+      await sendAdminHelp(msg.chat.id);
+      return;
+    }
+
     const mode = getChatMode(msg.chat.id);
     await bot.sendMessage(
       msg.chat.id,
@@ -721,10 +859,7 @@ function setupBotHandlers(bot, services) {
         "/cod <orderCode> - Chon thanh toan COD",
         "/qr <orderCode> - Nhan link QR mock",
         "/pay <orderCode> - Gia lap thanh toan thanh cong",
-        "/delivered <orderCode> - Admin xac nhan don da giao",
         "/cancel - Huy checkout hien tai",
-        "/orders - Admin xem danh sach don",
-        "/order <orderCode> - Admin xem chi tiet don",
         "/ai <noi_dung> - Thu parser AI dat mon",
         "/mode - Xem che do hien tai",
         "/mode list - Ve che do dat theo danh sach",
@@ -734,7 +869,7 @@ function setupBotHandlers(bot, services) {
         "Vi du: /add TS03 L 2",
         'Vi du: /add "Tra Sua Truyen Thong" L 2',
       ].join("\n"),
-      getMainKeyboard()
+      getKeyboardByRole(msg.chat.id)
     );
   }));
 
@@ -984,18 +1119,18 @@ function setupBotHandlers(bot, services) {
     logCommand(chatId, "/orders");
 
     if (!isAdminChat(chatId)) {
-      await bot.sendMessage(chatId, "Ban khong co quyen dung lenh nay.");
+      await bot.sendMessage(chatId, "Ban khong co quyen dung lenh nay.", getKeyboardByRole(chatId));
       return;
     }
 
     const orders = await orderService.listOrders();
     if (orders.length === 0) {
-      await bot.sendMessage(chatId, "Chua co don hang nao");
+      await bot.sendMessage(chatId, "Chua co don hang nao", getAdminKeyboard());
       return;
     }
 
     const lines = orders.map((order) => formatAdminOrderLine(order));
-    await bot.sendMessage(chatId, lines.join("\n"));
+    await bot.sendMessage(chatId, lines.join("\n"), getAdminKeyboard());
   }));
 
   bot.onText(/^\/order(?:\s+([A-Za-z0-9]+))?$/i, safe(async (msg, match) => {
@@ -1004,7 +1139,7 @@ function setupBotHandlers(bot, services) {
     logCommand(chatId, "/order", orderCode);
 
     if (!isAdminChat(chatId)) {
-      await bot.sendMessage(chatId, "Ban khong co quyen dung lenh nay.");
+      await bot.sendMessage(chatId, "Ban khong co quyen dung lenh nay.", getKeyboardByRole(chatId));
       return;
     }
 
@@ -1020,7 +1155,7 @@ function setupBotHandlers(bot, services) {
     }
 
     const detail = buildAdminOrderDetail(order);
-    await bot.sendMessage(chatId, detail);
+    await bot.sendMessage(chatId, detail, getAdminKeyboard());
   }));
 
   bot.onText(/^\/cod(?:\s+([A-Za-z0-9]+))?$/i, safe(async (msg, match) => {
@@ -1135,7 +1270,7 @@ function setupBotHandlers(bot, services) {
     logCommand(chatId, "/delivered", orderCode);
 
     if (!isAdminChat(chatId)) {
-      await bot.sendMessage(chatId, "Ban khong co quyen dung lenh nay.");
+      await bot.sendMessage(chatId, "Ban khong co quyen dung lenh nay.", getKeyboardByRole(chatId));
       return;
     }
 
@@ -1154,6 +1289,113 @@ function setupBotHandlers(bot, services) {
     if (String(updated.chatId) !== String(chatId)) {
       await bot.sendMessage(updated.chatId, `Don ${orderCode} cua ban da duoc giao thanh cong.`);
     }
+  }));
+
+  bot.onText(/^\/menuadmin$/i, safe(async (msg) => {
+    const chatId = msg.chat.id;
+    logCommand(chatId, "/menuadmin");
+
+    if (!isAdminChat(chatId)) {
+      await bot.sendMessage(chatId, "Ban khong co quyen dung lenh nay.", getKeyboardByRole(chatId));
+      return;
+    }
+
+    await sendAdminMenu(chatId);
+  }));
+
+  bot.onText(/^\/menuadd(?:\s+(.+))?$/i, safe(async (msg, match) => {
+    const chatId = msg.chat.id;
+    const rawArgs = match && match[1] ? match[1] : "";
+    logCommand(chatId, "/menuadd", rawArgs);
+
+    if (!isAdminChat(chatId)) {
+      await bot.sendMessage(chatId, "Ban khong co quyen dung lenh nay.", getKeyboardByRole(chatId));
+      return;
+    }
+
+    const parsed = parseMenuAddArgs(rawArgs);
+    if (!parsed.ok) {
+      await bot.sendMessage(chatId, parsed.error, getAdminKeyboard());
+      return;
+    }
+
+    const created = menuService.addMenuItem(parsed.payload);
+    if (!created.ok) {
+      await bot.sendMessage(chatId, created.error, getAdminKeyboard());
+      return;
+    }
+
+    try {
+      await menuService.saveMenuToCsv();
+    } catch (error) {
+      await bot.sendMessage(chatId, `Da them mon nhung luu CSV that bai: ${error.message}`, getAdminKeyboard());
+      return;
+    }
+
+    await bot.sendMessage(chatId, `Da them mon ${created.item.itemId} - ${created.item.name}.`, getAdminKeyboard());
+  }));
+
+  bot.onText(/^\/menuedit(?:\s+(.+))?$/i, safe(async (msg, match) => {
+    const chatId = msg.chat.id;
+    const rawArgs = match && match[1] ? match[1] : "";
+    logCommand(chatId, "/menuedit", rawArgs);
+
+    if (!isAdminChat(chatId)) {
+      await bot.sendMessage(chatId, "Ban khong co quyen dung lenh nay.", getKeyboardByRole(chatId));
+      return;
+    }
+
+    const parsed = parseMenuEditArgs(rawArgs);
+    if (!parsed.ok) {
+      await bot.sendMessage(chatId, parsed.error, getAdminKeyboard());
+      return;
+    }
+
+    const updated = menuService.updateMenuItem(parsed.itemId, parsed.updates);
+    if (!updated.ok) {
+      await bot.sendMessage(chatId, updated.error, getAdminKeyboard());
+      return;
+    }
+
+    try {
+      await menuService.saveMenuToCsv();
+    } catch (error) {
+      await bot.sendMessage(chatId, `Da sua mon nhung luu CSV that bai: ${error.message}`, getAdminKeyboard());
+      return;
+    }
+
+    await bot.sendMessage(chatId, `Da cap nhat ${updated.item.itemId} - ${updated.item.name}.`, getAdminKeyboard());
+  }));
+
+  bot.onText(/^\/menudelete(?:\s+([A-Za-z0-9]+))?$/i, safe(async (msg, match) => {
+    const chatId = msg.chat.id;
+    const itemId = match && match[1] ? match[1] : "";
+    logCommand(chatId, "/menudelete", itemId);
+
+    if (!isAdminChat(chatId)) {
+      await bot.sendMessage(chatId, "Ban khong co quyen dung lenh nay.", getKeyboardByRole(chatId));
+      return;
+    }
+
+    if (!itemId) {
+      await bot.sendMessage(chatId, "Sai cu phap. Dung: /menudelete <item_id>", getAdminKeyboard());
+      return;
+    }
+
+    const removed = menuService.removeMenuItem(itemId);
+    if (!removed.ok) {
+      await bot.sendMessage(chatId, removed.error, getAdminKeyboard());
+      return;
+    }
+
+    try {
+      await menuService.saveMenuToCsv();
+    } catch (error) {
+      await bot.sendMessage(chatId, `Da xoa mon nhung luu CSV that bai: ${error.message}`, getAdminKeyboard());
+      return;
+    }
+
+    await bot.sendMessage(chatId, `Da xoa mon ${removed.item.itemId} - ${removed.item.name}.`, getAdminKeyboard());
   }));
 
   bot.onText(/^\/ai(?:\s+(.+))?$/i, safe(async (msg, match) => {
@@ -1432,6 +1674,42 @@ function setupBotHandlers(bot, services) {
       return;
     }
 
+    if (text === "Xem đơn hàng") {
+      if (!isAdminChat(chatId)) {
+        await bot.sendMessage(chatId, "Ban khong co quyen dung lenh nay.", getKeyboardByRole(chatId));
+        return;
+      }
+
+      const orders = await orderService.listOrders();
+      if (!orders.length) {
+        await bot.sendMessage(chatId, "Chua co don hang nao", getAdminKeyboard());
+        return;
+      }
+
+      await bot.sendMessage(chatId, orders.map((order) => formatAdminOrderLine(order)).join("\n"), getAdminKeyboard());
+      return;
+    }
+
+    if (text === "Xem menu admin") {
+      if (!isAdminChat(chatId)) {
+        await bot.sendMessage(chatId, "Ban khong co quyen dung lenh nay.", getKeyboardByRole(chatId));
+        return;
+      }
+
+      await sendAdminMenu(chatId);
+      return;
+    }
+
+    if (text === "Hướng dẫn admin") {
+      if (!isAdminChat(chatId)) {
+        await bot.sendMessage(chatId, "Ban khong co quyen dung lenh nay.", getKeyboardByRole(chatId));
+        return;
+      }
+
+      await sendAdminHelp(chatId);
+      return;
+    }
+
     if (text === "Xem giỏ hàng") {
       await sendCart(chatId);
       return;
@@ -1452,7 +1730,7 @@ function setupBotHandlers(bot, services) {
       await bot.sendMessage(
         chatId,
         "Đã chuyển sang chế độ LIST. Mình sẽ dẫn bạn chọn món theo từng bước bằng nút bấm.",
-        getMainKeyboard()
+        getKeyboardByRole(chatId)
       );
       await sendListMenu(chatId);
       return;
@@ -1468,7 +1746,7 @@ function setupBotHandlers(bot, services) {
       await bot.sendMessage(
         chatId,
         "Đã chuyển sang chế độ AI. Bạn có thể nhập tự nhiên để bot parse.",
-        getMainKeyboard()
+        getKeyboardByRole(chatId)
       );
       return;
     }
@@ -1505,7 +1783,7 @@ function setupBotHandlers(bot, services) {
       await bot.sendMessage(
         chatId,
         "Ban dang o che do LIST. Dung /menu de xem mon, hoac /mode ai neu muon nhap ngon ngu tu nhien.",
-        getMainKeyboard()
+        getKeyboardByRole(chatId)
       );
       return;
     }
@@ -1515,7 +1793,7 @@ function setupBotHandlers(bot, services) {
       return;
     }
 
-    await bot.sendMessage(chatId, "Mình chưa hiểu ý bạn. Dùng /help để xem lệnh hỗ trợ nhé.", getMainKeyboard());
+    await bot.sendMessage(chatId, "Mình chưa hiểu ý bạn. Dùng /help để xem lệnh hỗ trợ nhé.", getKeyboardByRole(chatId));
   }));
 }
 

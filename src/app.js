@@ -36,16 +36,24 @@ async function startApp() {
       : new TelegramBot(token, { polling: true });
 
   if (botMode === "webhook") {
-    const webhookPath = `/telegram/webhook/${token}`;
+    const webhookPath = "/telegram/webhook";
     const webhookUrl = process.env.TELEGRAM_WEBHOOK_URL;
+    const webhookSecret = process.env.TELEGRAM_WEBHOOK_SECRET || token.slice(-24);
 
     if (!webhookUrl) {
       throw new Error("Missing TELEGRAM_WEBHOOK_URL for webhook mode.");
     }
 
-    await bot.setWebHook(`${webhookUrl}${webhookPath}`);
+    await bot.setWebHook(`${webhookUrl}${webhookPath}`, {
+      secret_token: webhookSecret,
+    });
 
     app.post(webhookPath, (req, res) => {
+      if (req.get("x-telegram-bot-api-secret-token") !== webhookSecret) {
+        res.sendStatus(401);
+        return;
+      }
+
       res.sendStatus(200);
 
       // Acknowledge Telegram immediately, then process update in background.
