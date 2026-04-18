@@ -75,6 +75,16 @@ function getAiToppingDecisionKeyboard() {
   };
 }
 
+function buildAiNextStepHint() {
+  return [
+    "",
+    "Tiếp theo bạn có thể:",
+    "- Xem giỏ hàng",
+    "- Checkout",
+    "- Chọn món khác",
+  ];
+}
+
 function buildCartAdjustKeyboard(cart) {
   const items = cart && Array.isArray(cart.items) ? cart.items : [];
   if (items.length === 0) {
@@ -1323,6 +1333,7 @@ function setupBotHandlers(bot, services) {
       [
         `Mình đã thêm ${validation.quantity} ${menuItem.name} size ${validation.size} vào giỏ rồi nhé.`,
         `Topping: ${toppingText}`,
+        ...buildAiNextStepHint(),
       ].join("\n"),
       getAiPostActionKeyboard()
     );
@@ -1780,6 +1791,7 @@ function setupBotHandlers(bot, services) {
         "Mình xử lý xong rồi nè:",
         ...successes.map((m) => `- ${m}`),
         ...(failures.length ? ["", "Mình chưa làm được một vài ý:", ...failures.slice(0, 3).map((m) => `- ${m}`)] : []),
+        ...buildAiNextStepHint(),
       ].join("\n"),
       getAiPostActionKeyboard()
     );
