@@ -132,32 +132,43 @@ function buildMenuPrompt(menu) {
 
 function parseFallback(message, menu) {
   const normalized = cleanUserText(message);
-  const quantity = parseQuantity(message);
-  const size = parseSize(message);
+  const segments = normalized.split(/\bva\b|,|\bvoi\b/).map((part) => part.trim()).filter(Boolean);
+  const candidates = segments.length > 1 ? segments : [message];
+  const items = [];
 
-  const bestItem = resolveBestMenuItem(normalized, menu);
-  if (bestItem) {
-    const missingFields = [];
-    if (!size) {
-      missingFields.push("size");
-    }
-    if (!quantity) {
-      missingFields.push("quantity");
+  for (const candidate of candidates) {
+    const quantity = parseQuantity(candidate) || parseQuantity(message) || 1;
+    const size = parseSize(candidate) || parseSize(message) || "M";
+    const bestItem = resolveBestMenuItem(candidate, menu);
+    if (!bestItem) {
+      continue;
     }
 
+    items.push({
+      action: "add",
+      itemId: bestItem.itemId,
+      itemName: bestItem.name,
+      quantity,
+      size,
+      toppings: [],
+      note: "",
+    });
+  }
+
+  if (items.length > 0) {
     return {
       intent: "add_to_cart",
-      items: [
-        {
-          itemId: bestItem.itemId,
-          itemName: bestItem.name,
-          quantity: quantity || 1,
-          size,
-          toppings: [],
-          note: "",
-        },
-      ],
-      missingFields,
+      items,
+      missingFields: [],
+    };
+  }
+
+  const looksLikeUpdate = /\b(giam|bot|xoa|bo|doi|thay)\b/.test(normalized) && /\b(gio|mon|topping)\b/.test(normalized);
+  if (looksLikeUpdate) {
+    return {
+      intent: "update_cart",
+      items: [],
+      missingFields: ["target_item"],
     };
   }
 
@@ -181,7 +192,21 @@ async function parseWithOpenAi(message, menu) {
       {
         role: "system",
         content:
-          "Ban la parser dat mon cho quan tra sua. Tra ve DUY NHAT JSON hop le voi schema {intent, items, missingFields}. Khong tinh tien. Khong tao mon khong co trong menu.",
+          [
+            "Ban la parser dat mon cho quan tra sua.",
+            "Tra ve DUY NHAT JSON hop le voi schema {intent, items, missingFields}.",
+            "intent hop le: add_to_cart | update_cart | checkout | unknown.",
+            "items la danh sach thao tac, moi phan tu co the co:",
+            "- action: add | set_quantity | remove | add_toppings | remove_toppings | replace_toppings",
+            "- itemId, itemName: mon can them",
+            "- targetItemId, targetItemName: mon da co trong gio can cap nhat",
+            "- size: M|L",
+            "- quantity: so nguyen >= 0 (0 nghia la xoa mon)",
+            "- toppings: mang ten topping",
+            "- note: ghi chu",
+            "Quan trong: neu khach noi nhieu mon trong 1 cau (co 'va'), phai tra nhieu phan tu trong items.",
+            "Khong tinh tien. Khong tao mon khong co trong menu.",
+          ].join(" "),
       },
       {
         role: "user",
@@ -226,14 +251,17 @@ async function parseOrderMessage(message, menu) {
 }
 
 const AI_OUTPUT_SCHEMA = {
-  intent: "add_to_cart | checkout | unknown",
+  intent: "add_to_cart | update_cart | checkout | unknown",
   items: [
     {
+      action: "add | set_quantity | remove | add_toppings | remove_toppings | replace_toppings",
+      targetItemId: "string",
+      targetItemName: "string",
       itemId: "string",
       itemName: "string",
       size: "M|L",
       quantity: 1,
-      toppings: [],
+      toppings: ["string"],
       note: "",
     },
   ],

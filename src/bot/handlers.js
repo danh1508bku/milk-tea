@@ -33,6 +33,18 @@ function getDeliveryMethodKeyboard() {
   };
 }
 
+function getAiPostActionKeyboard() {
+  return {
+    reply_markup: {
+      keyboard: [
+        ["Xem giỏ hàng", "Checkout"],
+        ["Chọn món khác"],
+      ],
+      resize_keyboard: true,
+    },
+  };
+}
+
 function buildCartAdjustKeyboard(cart) {
   const items = cart && Array.isArray(cart.items) ? cart.items : [];
   if (items.length === 0) {
@@ -1028,58 +1040,275 @@ function setupBotHandlers(bot, services) {
     return { item: null, matches };
   }
 
+  function resolveToppingItems(toppingNames) {
+    const names = Array.isArray(toppingNames) ? toppingNames : [];
+    if (!names.length) {
+      return [];
+    }
+
+    const availableToppings = getAvailableToppings();
+    const resolved = [];
+
+    for (const name of names) {
+      const query = menuService.normalizeText(name);
+      if (!query) {
+        continue;
+      }
+
+      const match = availableToppings.find((top) => {
+        const n = menuService.normalizeText(top.name);
+        return n.includes(query) || query.includes(n);
+      });
+
+      if (match && !resolved.some((item) => item.itemId === match.itemId)) {
+        resolved.push(match);
+      }
+    }
+
+    return resolved;
+  }
+
+  function recalcCartLinePrice(lineItem) {
+    const menuItem = menuService.getItemByCode(lineItem.itemId);
+    const normalizedSize = String(lineItem.size || "M").toUpperCase() === "L" ? "L" : "M";
+    lineItem.size = normalizedSize;
+
+    let baseUnitPrice = Number(lineItem.baseUnitPrice || lineItem.unitPrice || 0);
+    if (menuItem) {
+      baseUnitPrice = normalizedSize === "L" ? Number(menuItem.priceL || 0) : Number(menuItem.priceM || 0);
+      lineItem.name = menuItem.name;
+      lineItem.category = menuItem.category;
+    }
+
+    const toppingDetails = Array.isArray(lineItem.toppingDetails) ? lineItem.toppingDetails : [];
+    const toppingUnitTotal = toppingDetails.reduce((sum, top) => sum + Number(top.unitPrice || 0), 0);
+    lineItem.baseUnitPrice = baseUnitPrice;
+    lineItem.unitPrice = baseUnitPrice + toppingUnitTotal;
+    lineItem.toppings = toppingDetails.map((top) => top.name);
+  }
+
+  function resolveCartLineByTarget(cart, draft) {
+    const items = cart && Array.isArray(cart.items) ? cart.items : [];
+    if (!items.length) {
+      return null;
+    }
+
+    const targetItemId = String(draft.targetItemId || draft.itemId || "").trim().toUpperCase();
+    const targetItemName = String(draft.targetItemName || draft.itemName || "").trim();
+    const targetSize = String(draft.size || "").trim().toUpperCase();
+
+    if (targetItemId) {
+      const idx = items.findIndex((item) => String(item.itemId || "").toUpperCase() === targetItemId);
+      if (idx >= 0) {
+        return idx + 1;
+      }
+    }
+
+    if (!targetItemName) {
+      return null;
+    }
+
+    const query = menuService.normalizeText(targetItemName);
+    const idx = items.findIndex((item) => {
+      const itemName = menuService.normalizeText(item.name || "");
+      const sizeMatches = !targetSize || String(item.size || "").toUpperCase() === targetSize;
+      return sizeMatches && (itemName.includes(query) || query.includes(itemName));
+    });
+
+    return idx >= 0 ? idx + 1 : null;
+  }
+
   async function tryAddFromAi(chatId, text) {
     if (!llmService) {
       return false;
     }
 
     const parsed = await llmService.parseOrderMessage(text, menuService.getMenu());
-    if (!parsed || parsed.intent !== "add_to_cart" || !Array.isArray(parsed.items) || parsed.items.length === 0) {
+    if (!parsed || !Array.isArray(parsed.items)) {
       return false;
     }
 
-    const itemDraft = parsed.items[0];
-    const rawTarget = itemDraft.itemId || itemDraft.itemName;
-    const size = String(itemDraft.size || "").toUpperCase();
-    const quantity = Number.parseInt(itemDraft.quantity, 10);
+    const supportedIntents = ["add_to_cart", "update_cart", "checkout"];
+    if (!supportedIntents.includes(parsed.intent)) {
+      return false;
+    }
 
-    if (!rawTarget) {
-      await bot.sendMessage(chatId, "Mình chưa xác định được món bạn muốn đặt. Bạn thử nói rõ hơn hoặc dùng /menu.");
+    if (parsed.intent === "checkout") {
+      await startCheckout(chatId);
       return true;
     }
 
-    const targetType = menuService.getItemByCode(rawTarget) ? "code_or_name" : "code_or_name";
-    const resolved = resolveMenuItemFromAddTarget(rawTarget, targetType);
+    const ops = parsed.items.length > 0 ? parsed.items : [{}];
+    const successes = [];
+    const failures = [];
+    const mutableCart = cartService.getOrCreateCart(chatId);
 
-    if (resolved.error || resolved.matches) {
-      await bot.sendMessage(chatId, "Mình chưa chắc món bạn chọn. Bạn dùng /add theo item code để chính xác hơn nhé.");
-      return true;
+    for (const op of ops) {
+      const action = String(op.action || (parsed.intent === "add_to_cart" ? "add" : "set_quantity")).toLowerCase();
+
+      if (action === "add") {
+        const rawTarget = op.itemId || op.itemName;
+        if (!rawTarget) {
+          failures.push("Khong xac dinh duoc mon can them.");
+          continue;
+        }
+
+        const resolved = resolveMenuItemFromAddTarget(rawTarget, "code_or_name");
+        if (resolved.error || resolved.matches || !resolved.item) {
+          failures.push(`Khong chac mon '${rawTarget}'.`);
+          continue;
+        }
+
+        const size = String(op.size || "M").toUpperCase();
+        const quantity = Number.parseInt(op.quantity, 10);
+        const addCommand = `${resolved.item.itemId} ${size || "M"} ${Number.isInteger(quantity) && quantity > 0 ? quantity : 1}`;
+        const validation = validateAddCommand(addCommand, resolved.item);
+        if (!validation.isValid) {
+          failures.push(`Mon ${resolved.item.name}: ${validation.error}`);
+          continue;
+        }
+
+        const toppingItems = resolveToppingItems(op.toppings);
+        const toppingUnitTotal = toppingItems.reduce((sum, top) => sum + Number(top.priceM || 0), 0);
+        cartService.addItem(chatId, {
+          itemId: resolved.item.itemId,
+          name: resolved.item.name,
+          category: resolved.item.category,
+          size: validation.size,
+          quantity: validation.quantity,
+          unitPrice: validation.unitPrice + toppingUnitTotal,
+          baseUnitPrice: validation.unitPrice,
+          toppingDetails: toppingItems.map((top) => ({
+            itemId: top.itemId,
+            name: top.name,
+            unitPrice: Number(top.priceM || 0),
+          })),
+          toppings: toppingItems.map((top) => top.name),
+          note: String(op.note || "").trim(),
+        });
+
+        successes.push(`Mình đã thêm ${validation.quantity} ${resolved.item.name} size ${validation.size} vào giỏ.`);
+        continue;
+      }
+
+      const lineNumber = resolveCartLineByTarget(mutableCart, op);
+      if (!lineNumber) {
+        failures.push(`Khong tim thay mon can sua '${op.targetItemName || op.itemName || op.itemId || ""}'.`);
+        continue;
+      }
+
+      if (action === "remove") {
+        const result = cartService.removeItemByLine(chatId, lineNumber);
+        if (!result.ok) {
+          failures.push(result.error);
+          continue;
+        }
+        successes.push(`Mình đã bỏ ${result.removed.name} khỏi giỏ.`);
+        continue;
+      }
+
+      if (action === "set_quantity") {
+        const qty = Number.parseInt(op.quantity, 10);
+        if (!Number.isInteger(qty) || qty < 0) {
+          failures.push("So luong khong hop le.");
+          continue;
+        }
+        const result = cartService.updateItemQuantityByLine(chatId, lineNumber, qty);
+        if (!result.ok) {
+          failures.push(result.error);
+          continue;
+        }
+
+        if (result.deleted && result.removed) {
+          successes.push(`Mình đã bỏ ${result.removed.name} khỏi giỏ.`);
+        } else {
+          successes.push(`Mình đã đổi số lượng ${result.item.name} thành ${result.item.quantity}.`);
+        }
+        continue;
+      }
+
+      const lineItem = mutableCart.items[lineNumber - 1];
+      if (!lineItem) {
+        failures.push("Khong tim thay dong gio hang de cap nhat.");
+        continue;
+      }
+
+      if (["add_toppings", "remove_toppings", "replace_toppings"].includes(action)) {
+        const requestedToppings = resolveToppingItems(op.toppings);
+        const currentToppings = Array.isArray(lineItem.toppingDetails) ? [...lineItem.toppingDetails] : [];
+
+        if (action === "replace_toppings") {
+          lineItem.toppingDetails = requestedToppings.map((top) => ({
+            itemId: top.itemId,
+            name: top.name,
+            unitPrice: Number(top.priceM || 0),
+          }));
+        } else if (action === "add_toppings") {
+          const map = new Map(currentToppings.map((top) => [top.itemId, top]));
+          for (const top of requestedToppings) {
+            map.set(top.itemId, {
+              itemId: top.itemId,
+              name: top.name,
+              unitPrice: Number(top.priceM || 0),
+            });
+          }
+          lineItem.toppingDetails = Array.from(map.values());
+        } else {
+          const removeIds = new Set(requestedToppings.map((top) => top.itemId));
+          lineItem.toppingDetails = currentToppings.filter((top) => !removeIds.has(top.itemId));
+        }
+
+        if (op.size) {
+          lineItem.size = String(op.size).toUpperCase() === "L" ? "L" : "M";
+        }
+
+        if (op.quantity !== undefined && op.quantity !== null && op.quantity !== "") {
+          const qty = Number.parseInt(op.quantity, 10);
+          if (Number.isInteger(qty) && qty >= 0) {
+            const q = cartService.updateItemQuantityByLine(chatId, lineNumber, qty);
+            if (!q.ok) {
+              failures.push(q.error);
+              continue;
+            }
+            if (q.deleted) {
+              successes.push(`Mình đã bỏ ${q.removed.name} khỏi giỏ.`);
+              continue;
+            }
+          }
+        }
+
+        recalcCartLinePrice(lineItem);
+        successes.push(`Mình đã cập nhật topping cho ${lineItem.name}.`);
+        continue;
+      }
+
+      failures.push(`AI chua ho tro thao tac '${action}'.`);
     }
 
-    const addCommand = `${resolved.item.itemId} ${size || "M"} ${Number.isInteger(quantity) && quantity > 0 ? quantity : 1}`;
-    const validation = validateAddCommand(addCommand, resolved.item);
-    if (!validation.isValid) {
-      await bot.sendMessage(chatId, `Mình đã hiểu ý nhưng thiếu thông tin: ${parsed.missingFields.join(", ")}.`);
+    if (successes.length === 0 && failures.length > 0) {
+      await bot.sendMessage(
+        chatId,
+        [
+          "Mình chưa xử lý được yêu cầu chỉnh giỏ hàng.",
+          ...failures.slice(0, 3).map((m) => `- ${m}`),
+          "Bạn nói rõ hơn giúp mình nhé, ví dụ:",
+          "- giảm mocha còn 1",
+          "- xóa caramel",
+          "- đổi topping trân châu cho mocha",
+        ].join("\n"),
+        getAiPostActionKeyboard()
+      );
       return true;
     }
-
-    cartService.addItem(chatId, {
-      itemId: resolved.item.itemId,
-      name: resolved.item.name,
-      category: resolved.item.category,
-      size: validation.size,
-      quantity: validation.quantity,
-      unitPrice: validation.unitPrice,
-      baseUnitPrice: validation.unitPrice,
-      toppingDetails: [],
-      toppings: [],
-      note: "",
-    });
 
     await bot.sendMessage(
       chatId,
-      `AI da them ${validation.quantity} ${resolved.item.name} size ${validation.size} vao gio.`,
-      getMainKeyboard()
+      [
+        "Mình xử lý xong rồi nè:",
+        ...successes.map((m) => `- ${m}`),
+        ...(failures.length ? ["", "Mình chưa làm được một vài ý:", ...failures.slice(0, 3).map((m) => `- ${m}`)] : []),
+      ].join("\n"),
+      getAiPostActionKeyboard()
     );
     return true;
   }
