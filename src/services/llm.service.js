@@ -1,4 +1,113 @@
 const OpenAI = require("openai");
+const Fuse = require("fuse.js");
+
+const AI_INTENTS = [
+  "add_to_cart",
+  "update_cart",
+  "checkout",
+  "show_menu",
+  "show_cart",
+  "show_item_description",
+  "show_item_price",
+  "clear_cart",
+  "help",
+  "switch_mode",
+  "unknown",
+];
+
+const AI_ACTIONS = [
+  "add",
+  "set_quantity",
+  "remove",
+  "add_toppings",
+  "remove_toppings",
+  "replace_toppings",
+];
+
+const AI_OUTPUT_SCHEMA_DEF = {
+  type: "object",
+  properties: {
+    intent: {
+      type: "string",
+      enum: AI_INTENTS,
+    },
+    mode: {
+      anyOf: [
+        { type: "string", enum: ["LIST", "AI"] },
+        { type: "null" },
+      ],
+    },
+    targetIndex: {
+      anyOf: [{ type: "number" }, { type: "null" }],
+    },
+    targetItemName: {
+      anyOf: [{ type: "string" }, { type: "null" }],
+    },
+    checkoutInfo: {
+      anyOf: [
+        {
+          type: "object",
+          properties: {
+            customerName: { type: "string" },
+            phone: { type: "string" },
+            deliveryMethod: {
+              type: "string",
+              enum: ["pickup", "delivery", ""],
+            },
+            address: { type: "string" },
+            note: { type: "string" },
+          },
+          required: ["customerName", "phone", "deliveryMethod", "address", "note"],
+          additionalProperties: false,
+        },
+        { type: "null" },
+      ],
+    },
+    items: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          action: { type: "string", enum: AI_ACTIONS },
+          targetItemId: { anyOf: [{ type: "string" }, { type: "null" }] },
+          targetItemName: { anyOf: [{ type: "string" }, { type: "null" }] },
+          itemId: { anyOf: [{ type: "string" }, { type: "null" }] },
+          itemName: { anyOf: [{ type: "string" }, { type: "null" }] },
+          size: {
+            anyOf: [
+              { type: "string", enum: ["M", "L"] },
+              { type: "null" },
+            ],
+          },
+          quantity: { anyOf: [{ type: "number" }, { type: "null" }] },
+          toppings: {
+            type: "array",
+            items: { type: "string" },
+          },
+          note: { type: "string" },
+        },
+        required: [
+          "action",
+          "targetItemId",
+          "targetItemName",
+          "itemId",
+          "itemName",
+          "size",
+          "quantity",
+          "toppings",
+          "note",
+        ],
+        additionalProperties: false,
+      },
+    },
+    missingFields: {
+      type: "array",
+      items: { type: "string" },
+    },
+  },
+  required: ["intent", "items", "missingFields"],
+  additionalProperties: false,
+};
 
 function normalizeText(value) {
   return String(value || "")
@@ -209,6 +318,48 @@ function buildMenuPrompt(menu) {
     .join("\n");
 }
 
+function buildRelevantMenu(message, menu, maxItems = 10) {
+  const list = Array.isArray(menu) ? menu.filter(Boolean) : [];
+  if (!list.length) {
+    return [];
+  }
+
+  // Keep full menu for small catalogs.
+  if (list.length <= 50) {
+    return list;
+  }
+
+  const fuse = new Fuse(list, {
+    keys: ["name", "itemId", "category"],
+    includeScore: true,
+    threshold: 0.4,
+    ignoreLocation: true,
+  });
+
+  const raw = String(message || "").trim();
+  const results = fuse.search(raw, { limit: maxItems });
+  const picked = results.map((entry) => entry.item);
+  if (!picked.length) {
+    return list.slice(0, maxItems);
+  }
+
+  return picked;
+}
+
+function normalizeChatHistory(chatHistory = []) {
+  if (!Array.isArray(chatHistory)) {
+    return [];
+  }
+
+  return chatHistory
+    .filter((entry) => entry && (entry.role === "user" || entry.role === "assistant") && entry.content)
+    .slice(-6)
+    .map((entry) => ({
+      role: entry.role,
+      content: String(entry.content).slice(0, 800),
+    }));
+}
+
 function parseFallback(message, menu) {
   const normalized = cleanUserText(message);
 
@@ -378,45 +529,93 @@ function parseFallback(message, menu) {
   };
 }
 
-async function parseWithOpenAi(message, menu) {
+async function parseWithOpenAi(message, menu, chatHistory = []) {
   const client = getOpenAiClient();
   if (!client) {
     return null;
   }
 
-  const menuText = buildMenuPrompt(menu);
+  const relevantMenu = buildRelevantMenu(message, menu, Number(process.env.AI_MENU_CONTEXT_LIMIT || 10));
+  const menuText = buildMenuPrompt(relevantMenu);
+  const historyMessages = normalizeChatHistory(chatHistory);
+
   const response = await client.chat.completions.create({
-    model: process.env.OPENAI_MODEL || "gpt-4.1-mini",
+    model: process.env.OPENAI_MODEL || "gpt-4o-mini",
     messages: [
       {
         role: "system",
-        content:
-          [
-            "Ban la parser dat mon cho quan tra sua.",
-            "Tra ve DUY NHAT JSON hop le voi schema {intent, items, missingFields}.",
-            "intent hop le: add_to_cart | update_cart | checkout | show_menu | show_cart | show_item_description | show_item_price | clear_cart | help | switch_mode | unknown.",
-            "Voi intent checkout, tra ve them checkoutInfo: {customerName, phone, deliveryMethod, address, note} va missingFields cho cac truong con thieu.",
-            "Voi intent show_item_description, tra ve targetIndex hoac targetItemName de xac dinh mon can xem.",
-            "Voi intent show_item_price, tra ve targetIndex hoac targetItemName de xac dinh mon can xem gia.",
-            "items la danh sach thao tac, moi phan tu co the co:",
-            "- action: add | set_quantity | remove | add_toppings | remove_toppings | replace_toppings",
-            "- itemId, itemName: mon can them",
-            "- targetItemId, targetItemName: mon da co trong gio can cap nhat",
-            "- size: M|L",
-            "- quantity: so nguyen >= 0 (0 nghia la xoa mon)",
-            "- toppings: mang ten topping",
-            "- note: ghi chu",
-            "- mode: LIST|AI (chi dung voi intent switch_mode)",
-            "Quan trong: neu khach noi nhieu mon trong 1 cau (co 'va'), phai tra nhieu phan tu trong items.",
-            "Khong tinh tien. Khong tao mon khong co trong menu.",
-          ].join(" "),
+        content: [
+          "Bạn là trợ lý nhận order trà sữa.",
+          "Phân tích câu nói của khách và trả về JSON chính xác theo schema.",
+          "Không tự bịa tên món không có trong Menu.",
+          "Nếu khách nói nhiều món trong một câu, tách thành nhiều phần tử trong items.",
+          "Nếu thiếu thông tin thì điền missingFields hợp lý.",
+        ].join(" "),
       },
+      {
+        role: "user",
+        content: "Menu:\nTS01 | Trà Sữa Trân Châu | Trà Sữa\nTP01 | Pudding | Topping\n\nTin nhắn khách:\ncho 2 ly trà sữa trân châu size L thêm pudding nha",
+      },
+      {
+        role: "assistant",
+        content: JSON.stringify({
+          intent: "add_to_cart",
+          mode: null,
+          targetIndex: null,
+          targetItemName: null,
+          checkoutInfo: null,
+          items: [
+            {
+              action: "add",
+              targetItemId: null,
+              targetItemName: null,
+              itemId: "TS01",
+              itemName: "Trà Sữa Trân Châu",
+              size: "L",
+              quantity: 2,
+              toppings: ["pudding"],
+              note: "",
+            },
+          ],
+          missingFields: [],
+        }),
+      },
+      {
+        role: "user",
+        content: "Menu:\nCF01 | Cà Phê Đen | Cà Phê\n\nTin nhắn khách:\ngiao mình tới 268 Lý Thường Kiệt nha, sđt 0901234567, mình tên Danh",
+      },
+      {
+        role: "assistant",
+        content: JSON.stringify({
+          intent: "checkout",
+          mode: null,
+          targetIndex: null,
+          targetItemName: null,
+          checkoutInfo: {
+            customerName: "Danh",
+            phone: "0901234567",
+            deliveryMethod: "delivery",
+            address: "268 Lý Thường Kiệt",
+            note: "",
+          },
+          items: [],
+          missingFields: [],
+        }),
+      },
+      ...historyMessages,
       {
         role: "user",
         content: `Menu:\n${menuText}\n\nTin nhan khach:\n${message}`,
       },
     ],
-    response_format: { type: "json_object" },
+    response_format: {
+      type: "json_schema",
+      json_schema: {
+        name: "parse_milk_tea_order",
+        strict: true,
+        schema: AI_OUTPUT_SCHEMA_DEF,
+      },
+    },
     temperature: 0,
   });
 
@@ -440,13 +639,13 @@ async function parseWithOpenAi(message, menu) {
 }
 
 // Keep validation and pricing in backend services.
-async function parseOrderMessage(message, menu) {
+async function parseOrderMessage(message, menu, chatHistory = []) {
   if (String(process.env.ENABLE_AI || "false").toLowerCase() !== "true") {
     return parseFallback(message, menu);
   }
 
   try {
-    const aiResult = await parseWithOpenAi(message, menu);
+    const aiResult = await parseWithOpenAi(message, menu, chatHistory);
     if (aiResult) {
       const normalized = normalizeText(message);
       const hasMultiItemHint = /\bva\b|\bvoi\b|,/.test(normalized);
@@ -512,4 +711,5 @@ module.exports = {
   normalizeText,
   parseOrderMessage,
   AI_OUTPUT_SCHEMA,
+  AI_OUTPUT_SCHEMA_DEF,
 };

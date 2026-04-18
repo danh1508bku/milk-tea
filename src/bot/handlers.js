@@ -1232,15 +1232,49 @@ function setupBotHandlers(bot, services) {
     return true;
   }
 
+  function getAiChatHistory(chatId) {
+    const session = sessionService.getSession(chatId);
+    const history = session && session.data ? session.data.aiChatHistory : null;
+    if (!Array.isArray(history)) {
+      return [];
+    }
+
+    return history
+      .filter((entry) => entry && (entry.role === "user" || entry.role === "assistant") && entry.content)
+      .slice(-6);
+  }
+
+  function saveAiChatTurn(chatId, userText, parsed) {
+    const previous = getAiChatHistory(chatId);
+    const compactAssistant = JSON.stringify({
+      intent: parsed && parsed.intent ? parsed.intent : "unknown",
+      targetIndex: parsed && parsed.targetIndex ? parsed.targetIndex : null,
+      targetItemName: parsed && parsed.targetItemName ? parsed.targetItemName : null,
+      items: Array.isArray(parsed && parsed.items) ? parsed.items.slice(0, 3) : [],
+      missingFields: Array.isArray(parsed && parsed.missingFields) ? parsed.missingFields : [],
+    });
+
+    const nextHistory = [
+      ...previous,
+      { role: "user", content: String(userText || "").slice(0, 400) },
+      { role: "assistant", content: compactAssistant.slice(0, 800) },
+    ].slice(-8);
+
+    sessionService.mergeData(chatId, { aiChatHistory: nextHistory });
+  }
+
   async function tryAddFromAi(chatId, text) {
     if (!llmService) {
       return false;
     }
 
-    const parsed = await llmService.parseOrderMessage(text, menuService.getMenu());
+    const chatHistory = getAiChatHistory(chatId);
+    const parsed = await llmService.parseOrderMessage(text, menuService.getMenu(), chatHistory);
     if (!parsed || !Array.isArray(parsed.items)) {
       return false;
     }
+
+    saveAiChatTurn(chatId, text, parsed);
 
     const supportedIntents = [
       "add_to_cart",
