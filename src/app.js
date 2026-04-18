@@ -88,7 +88,30 @@ async function startApp() {
 
     if (result.orderCode) {
       const paymentStatus = result.status === "PAID" ? orderService.PAYMENT_STATUS.PAID : orderService.PAYMENT_STATUS.FAILED;
-      await orderService.updateOrderPayment(result.orderCode, paymentStatus);
+      const currentOrder = await orderService.getOrderByCode(result.orderCode);
+      const shouldNotify = currentOrder && currentOrder.paymentStatus !== paymentStatus;
+      const updatedOrder = await orderService.updateOrderPayment(result.orderCode, paymentStatus);
+
+      if (shouldNotify && updatedOrder) {
+        if (paymentStatus === orderService.PAYMENT_STATUS.PAID) {
+          await bot.sendMessage(
+            updatedOrder.chatId,
+            `Thanh toan PayOS thanh cong cho don ${updatedOrder.orderCode}. Cam on ban!`
+          );
+
+          if (adminChatId && String(adminChatId) !== String(updatedOrder.chatId)) {
+            await bot.sendMessage(
+              adminChatId,
+              `Don ${updatedOrder.orderCode} da thanh toan thanh cong qua PayOS.`
+            );
+          }
+        } else if (paymentStatus === orderService.PAYMENT_STATUS.FAILED) {
+          await bot.sendMessage(
+            updatedOrder.chatId,
+            `Thanh toan PayOS cho don ${updatedOrder.orderCode} chua thanh cong. Ban co the thanh toan lai bang /qr ${updatedOrder.orderCode}.`
+          );
+        }
+      }
     }
 
     res.json({ success: true });

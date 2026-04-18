@@ -16,20 +16,9 @@ function isPayOsConfigured() {
 
 function getPaymentOptions(orderCode) {
   return [
-    { code: PAYMENT_METHODS.COD, label: `1. COD (/cod ${orderCode})` },
-    { code: PAYMENT_METHODS.QR, label: `2. QR Payment (/qr ${orderCode})` },
+    { code: PAYMENT_METHODS.COD, label: `1. COD (thanh toan khi nhan hang)` },
+    { code: PAYMENT_METHODS.QR, label: `2. QR PayOS (thanh toan online)` },
   ];
-}
-
-function createMockPaymentLink(order) {
-  return {
-    provider: "mock",
-    paymentUrl: `https://pay.mock/${order.orderCode}`,
-    checkoutUrl: `https://pay.mock/${order.orderCode}`,
-    qrCode: `MOCK_QR_${order.orderCode}`,
-    status: "CREATED",
-    expiredAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
-  };
 }
 
 function buildPayOsSignature(data, checksumKey) {
@@ -86,7 +75,7 @@ async function createPayOsPaymentLink(order) {
 
 async function createPaymentLink(order) {
   if (!isPayOsConfigured()) {
-    return createMockPaymentLink(order);
+    throw new Error("PayOS chua duoc cau hinh day duoc tren server.");
   }
 
   return createPayOsPaymentLink(order);
@@ -132,7 +121,7 @@ function handlePaymentWebhook(payload, signature) {
   const data = payload && payload.data ? payload.data : {};
   return {
     success: true,
-    provider: isPayOsConfigured() ? "payos" : "mock",
+    provider: "payos",
     orderCode: data.description ? String(data.description).split(" ").pop() : payload.orderCode || null,
     amount: data.amount || 0,
     status: data.code === "00" ? "PAID" : "FAILED",

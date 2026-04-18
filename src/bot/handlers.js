@@ -133,6 +133,19 @@ function getModeInlineKeyboard() {
   };
 }
 
+function buildPaymentMethodInlineKeyboard(orderCode) {
+  return {
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: "Thanh toán COD", callback_data: `pm:cod:${orderCode}` },
+          { text: "Thanh toán QR PayOS", callback_data: `pm:qr:${orderCode}` },
+        ],
+      ],
+    },
+  };
+}
+
 function setupBotHandlers(bot, services) {
   const {
     menuService,
@@ -904,7 +917,7 @@ function setupBotHandlers(bot, services) {
     return [
       `🧾 ĐƠN MỚI: ${order.orderCode}`,
       `Khách: ${order.customerName}`,
-      `SĐT: ${maskPhone(order.phone)}`,
+      `SĐT: ${order.phone || "(không có)"}`,
       `Địa chỉ: ${address}`,
       "Món:",
       itemLines,
@@ -1193,8 +1206,7 @@ function setupBotHandlers(bot, services) {
         "/checkout - Bat dau quy trinh dat hang",
         "/confirm - Xac nhan dat don (khi dang checkout)",
         "/cod <orderCode> - Chon thanh toan COD",
-        "/qr <orderCode> - Nhan link QR mock",
-        "/pay <orderCode> - Gia lap thanh toan thanh cong",
+        "/qr <orderCode> - Nhan link thanh toan QR PayOS",
         "/cancel - Huy checkout hien tai",
         "/ai <noi_dung> - Thu parser AI dat mon",
         "/mode - Xem che do hien tai",
@@ -1488,11 +1500,10 @@ function setupBotHandlers(bot, services) {
         `Trang thai don: ${order.status}`,
         `Trang thai thanh toan: ${order.paymentStatus}`,
         "",
-        "Chon phuong thuc thanh toan:",
+        "Chon phuong thuc thanh toan (bấm nút):",
         ...paymentOptions.map((opt) => opt.label),
-        `Sau khi QR thanh cong, nhap /pay ${order.orderCode}`,
       ].join("\n"),
-      getMainKeyboard()
+      buildPaymentMethodInlineKeyboard(order.orderCode)
     );
   }));
 
@@ -1600,15 +1611,21 @@ function setupBotHandlers(bot, services) {
     }
 
     await orderService.setPaymentMethod(orderCode, choice.paymentMethod);
-    const paymentLink = await paymentService.createPaymentLink(order);
-    await orderService.saveOrderPayment(orderCode, paymentLink);
+    let paymentLink;
+    try {
+      paymentLink = await paymentService.createPaymentLink(order);
+      await orderService.saveOrderPayment(orderCode, paymentLink);
+    } catch (error) {
+      await bot.sendMessage(chatId, `Khong tao duoc link thanh toan PayOS: ${error.message}`);
+      return;
+    }
 
     await bot.sendMessage(
       chatId,
       [
         `Link thanh toan QR cho don ${orderCode}:`,
         paymentLink.paymentUrl || paymentLink.checkoutUrl,
-        `Sau khi thanh toan xong, nhap /pay ${orderCode}`,
+        "Sau khi thanh toan xong, he thong se tu dong cap nhat trang thai don.",
       ].join("\n")
     );
   }));
@@ -1618,37 +1635,10 @@ function setupBotHandlers(bot, services) {
     const orderCode = match && match[1] ? String(match[1]).toUpperCase() : "";
     logCommand(chatId, "/pay", orderCode);
 
-    if (await denyBuyerFlowForAdmin(chatId)) {
-      return;
-    }
-
-    if (!orderCode) {
-      await bot.sendMessage(chatId, "Sai cu phap. Dung: /pay <orderCode>");
-      return;
-    }
-
-    const order = await orderService.getOrderByCode(orderCode);
-    if (!order) {
-      await bot.sendMessage(chatId, `Khong tim thay don ${orderCode}.`);
-      return;
-    }
-
-    if (!canManageOrder(chatId, order)) {
-      await bot.sendMessage(chatId, "Ban khong co quyen thao tac don nay.");
-      return;
-    }
-
-    const updated = await orderService.updateOrderPayment(orderCode, orderService.PAYMENT_STATUS.PAID);
-    if (!updated) {
-      await bot.sendMessage(chatId, `Khong cap nhat duoc thanh toan cho ${orderCode}.`);
-      return;
-    }
-
-    await bot.sendMessage(chatId, `Thanh toan thanh cong cho don ${orderCode}.`);
-
-    if (adminChatId && String(chatId) !== String(adminChatId)) {
-      await bot.sendMessage(adminChatId, `Don ${orderCode} da thanh toan thanh cong.`);
-    }
+    await bot.sendMessage(
+      chatId,
+      "Lenh /pay da tat trong production. Vui long thanh toan qua QR PayOS de he thong tu cap nhat."
+    );
   }));
 
   bot.onText(/^\/delivered(?:\s+([A-Za-z0-9]+))?$/i, safe(async (msg, match) => {
@@ -1815,8 +1805,86 @@ function setupBotHandlers(bot, services) {
     const data = String(query.data || "");
     const messageId = query && query.message ? query.message.message_id : null;
 
-    if (!chatId || (!data.startsWith("lf:") && !data.startsWith("ad:"))) {
+    if (!chatId || (!data.startsWith("lf:") && !data.startsWith("ad:") && !data.startsWith("pm:"))) {
       return;
+    }
+
+    if (data.startsWith("pm:")) {
+      try {
+        const parts = data.split(":");
+        const method = String(parts[1] || "").toLowerCase();
+        const orderCode = String(parts[2] || "").toUpperCase();
+
+        if (!orderCode) {
+          await bot.answerCallbackQuery(query.id, { text: "Ma don khong hop le.", show_alert: true });
+          return;
+        }
+
+        const order = await orderService.getOrderByCode(orderCode);
+        if (!order) {
+          await bot.answerCallbackQuery(query.id, { text: `Khong tim thay don ${orderCode}.`, show_alert: true });
+          return;
+        }
+
+        if (!canManageOrder(chatId, order)) {
+          await bot.answerCallbackQuery(query.id, { text: "Ban khong co quyen thao tac don nay.", show_alert: true });
+          return;
+        }
+
+        if (method === "cod") {
+          const choice = paymentService.choosePaymentMethod(orderCode, paymentService.PAYMENT_METHODS.COD);
+          if (!choice.ok) {
+            await bot.answerCallbackQuery(query.id, { text: choice.error, show_alert: true });
+            return;
+          }
+
+          await orderService.setPaymentMethod(orderCode, choice.paymentMethod);
+          await bot.answerCallbackQuery(query.id, { text: `Da chon COD cho ${orderCode}` });
+          await bot.sendMessage(chatId, `Da chon COD cho don ${orderCode}.`);
+          return;
+        }
+
+        if (method === "qr") {
+          const choice = paymentService.choosePaymentMethod(orderCode, paymentService.PAYMENT_METHODS.QR);
+          if (!choice.ok) {
+            await bot.answerCallbackQuery(query.id, { text: choice.error, show_alert: true });
+            return;
+          }
+
+          await orderService.setPaymentMethod(orderCode, choice.paymentMethod);
+          const paymentLink = await paymentService.createPaymentLink(order);
+          await orderService.saveOrderPayment(orderCode, paymentLink);
+
+          await bot.answerCallbackQuery(query.id, { text: "Da tao link thanh toan PayOS" });
+          await bot.sendMessage(
+            chatId,
+            [
+              `Link thanh toan cho don ${orderCode}:`,
+              paymentLink.paymentUrl || paymentLink.checkoutUrl,
+              "Sau khi thanh toan, he thong se tu dong cap nhat trang thai don.",
+            ].join("\n")
+          );
+          return;
+        }
+
+        await bot.answerCallbackQuery(query.id);
+        return;
+      } catch (error) {
+        logEvent("PAYMENT_CALLBACK_ERROR", {
+          chatId,
+          messageId,
+          data,
+          message: error.message,
+          stack: error.stack,
+        });
+
+        try {
+          await bot.answerCallbackQuery(query.id, { text: "Khong tao duoc thanh toan, vui long thu lai.", show_alert: true });
+        } catch (answerError) {
+          logEvent("CALLBACK_ANSWER_FAILED", { chatId, reason: answerError.message });
+        }
+        return;
+      }
     }
 
     if (data.startsWith("ad:")) {
