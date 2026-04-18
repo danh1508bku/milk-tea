@@ -1337,7 +1337,7 @@ function setupBotHandlers(bot, services) {
     }
 
     const normalized = menuService.normalizeText(text || "");
-    if (["huy chon mon", "huy", "cancel", "dung", "thoi", "bo qua"].includes(normalized)) {
+    if (["huy chon mon", "huy mon", "huy", "cancel", "stop", "dung dat mon"].includes(normalized)) {
       sessionService.mergeData(chatId, { aiPendingAdd: null });
       await bot.sendMessage(chatId, "Mình đã hủy món đang chọn dở.", getAiPostActionKeyboard());
       return true;
@@ -1385,7 +1385,7 @@ function setupBotHandlers(bot, services) {
     }
 
     if (step === "toppingDecision") {
-      if (["bo qua topping", "bỏ qua topping", "khong", "không", "no", "thoi", "khoi topping", "khong can topping"].includes(normalized)) {
+      if (["bo qua topping", "bỏ qua topping", "bo qua", "boqua", "khong", "không", "ko", "k", "no", "thoi", "khoi topping", "khong can topping", "ko can topping", "khong them", "ko them"].includes(normalized)) {
         sessionService.mergeData(chatId, {
           aiPendingAdd: {
             ...pending,
@@ -1396,7 +1396,7 @@ function setupBotHandlers(bot, services) {
         return true;
       }
 
-      if (["them topping", "thêm topping", "chon topping", "chọn topping", "co", "có", "yes", "ok them", "them"].includes(normalized)) {
+      if (["them topping", "thêm topping", "chon topping", "chọn topping", "co", "có", "yes", "ok them", "them", "co them", "co topping"].includes(normalized)) {
         const nextPending = {
           ...pending,
           step: "toppingSelect",
@@ -1411,7 +1411,7 @@ function setupBotHandlers(bot, services) {
     }
 
     if (step === "toppingSelect") {
-      if (["bo qua topping", "bỏ qua topping", "khong", "không", "no", "thoi", "khoi topping"].includes(normalized)) {
+      if (["bo qua topping", "bỏ qua topping", "bo qua", "boqua", "khong", "không", "ko", "k", "no", "thoi", "khoi topping", "khong can topping", "ko can topping", "khong them", "ko them"].includes(normalized)) {
         sessionService.mergeData(chatId, {
           aiPendingAdd: {
             ...pending,
