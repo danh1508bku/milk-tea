@@ -1150,18 +1150,28 @@ function setupBotHandlers(bot, services) {
 
   function parseSizeChoice(text) {
     const normalized = menuService.normalizeText(text || "");
-    if (normalized === "size m" || normalized === "m") {
+    if (["size m", "m", "size vua", "vua", "size nho", "nho", "ly vua", "ly nho"].includes(normalized)) {
       return "M";
     }
-    if (normalized === "size l" || normalized === "l") {
+    if (["size l", "l", "size lon", "lon", "to", "ly lon"].includes(normalized)) {
       return "L";
     }
+
+    if (/\b(size|ly)\s*(m|vua|nho)\b/.test(normalized)) {
+      return "M";
+    }
+
+    if (/\b(size|ly)\s*(l|lon|to)\b/.test(normalized)) {
+      return "L";
+    }
+
     return null;
   }
 
   function parseQuantityChoice(text) {
     const normalized = menuService.normalizeText(text || "");
-    const direct = Number.parseInt(normalized, 10);
+    const numericMatch = normalized.match(/\b(\d{1,2})\b/);
+    const direct = numericMatch ? Number.parseInt(numericMatch[1], 10) : Number.parseInt(normalized, 10);
     if (Number.isInteger(direct) && direct > 0) {
       return direct;
     }
@@ -1327,7 +1337,7 @@ function setupBotHandlers(bot, services) {
     }
 
     const normalized = menuService.normalizeText(text || "");
-    if (["huy chon mon", "huy", "cancel"].includes(normalized)) {
+    if (["huy chon mon", "huy", "cancel", "dung", "thoi", "bo qua"].includes(normalized)) {
       sessionService.mergeData(chatId, { aiPendingAdd: null });
       await bot.sendMessage(chatId, "Mình đã hủy món đang chọn dở.", getAiPostActionKeyboard());
       return true;
@@ -1375,7 +1385,7 @@ function setupBotHandlers(bot, services) {
     }
 
     if (step === "toppingDecision") {
-      if (["bo qua topping", "bỏ qua topping", "khong", "không", "no"].includes(normalized)) {
+      if (["bo qua topping", "bỏ qua topping", "khong", "không", "no", "thoi", "khoi topping", "khong can topping"].includes(normalized)) {
         sessionService.mergeData(chatId, {
           aiPendingAdd: {
             ...pending,
@@ -1386,7 +1396,7 @@ function setupBotHandlers(bot, services) {
         return true;
       }
 
-      if (["them topping", "thêm topping", "chon topping", "chọn topping", "co", "có", "yes"].includes(normalized)) {
+      if (["them topping", "thêm topping", "chon topping", "chọn topping", "co", "có", "yes", "ok them", "them"].includes(normalized)) {
         const nextPending = {
           ...pending,
           step: "toppingSelect",
@@ -1401,7 +1411,7 @@ function setupBotHandlers(bot, services) {
     }
 
     if (step === "toppingSelect") {
-      if (["bo qua topping", "bỏ qua topping", "khong", "không", "no"].includes(normalized)) {
+      if (["bo qua topping", "bỏ qua topping", "khong", "không", "no", "thoi", "khoi topping"].includes(normalized)) {
         sessionService.mergeData(chatId, {
           aiPendingAdd: {
             ...pending,
@@ -3406,6 +3416,38 @@ function setupBotHandlers(bot, services) {
     }
 
     if (text === "Chế độ AI") {
+      const result = sessionService.setMode(chatId, MODES.AI);
+      if (!result.ok) {
+        await bot.sendMessage(chatId, result.error, getMainKeyboard());
+        return;
+      }
+
+      await bot.sendMessage(
+        chatId,
+        "Đã chuyển sang chế độ AI. Bạn có thể nhập tự nhiên để bot parse.",
+        getKeyboardByRole(chatId)
+      );
+      return;
+    }
+
+    const normalizedInput = menuService.normalizeText(text);
+    if (["ve list", "qua list", "che do list", "mode list", "dat bang nut", "nut bam"].includes(normalizedInput)) {
+      const result = sessionService.setMode(chatId, MODES.LIST);
+      if (!result.ok) {
+        await bot.sendMessage(chatId, result.error, getMainKeyboard());
+        return;
+      }
+
+      await bot.sendMessage(
+        chatId,
+        "Đã chuyển sang chế độ LIST. Mình sẽ dẫn bạn chọn món theo từng bước bằng nút bấm.",
+        getKeyboardByRole(chatId)
+      );
+      await sendListMenu(chatId);
+      return;
+    }
+
+    if (["ve ai", "qua ai", "che do ai", "mode ai", "chat tu nhien", "nhap tu nhien"].includes(normalizedInput)) {
       const result = sessionService.setMode(chatId, MODES.AI);
       if (!result.ok) {
         await bot.sendMessage(chatId, result.error, getMainKeyboard());

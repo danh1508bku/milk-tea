@@ -31,11 +31,27 @@ function parseQuantity(text) {
     return 1;
   }
 
+  if (/\b(hai|2ly|2coc)\b/.test(normalized)) {
+    return 2;
+  }
+
+  if (/\b(ba|3ly|3coc)\b/.test(normalized)) {
+    return 3;
+  }
+
   return null;
 }
 
 function parseSize(text) {
   const normalized = cleanUserText(text);
+  if (/\b(size\s*(m|vua|vừa|nho|nhỏ)|ly\s*(m|vua|vừa|nho|nhỏ)|vua|vừa|nho|nhỏ)\b/.test(normalized)) {
+    return "M";
+  }
+
+  if (/\b(size\s*(l|lon|lớn)|ly\s*(l|lon|lớn)|lon|lớn|to)\b/.test(normalized)) {
+    return "L";
+  }
+
   const sizeMatch = normalized.match(/\bsize\s*(m|l)\b|\b(m|l)\b/);
   if (!sizeMatch) {
     return null;
@@ -98,12 +114,12 @@ function parseCustomerName(text) {
 
 function parseTargetIndex(text) {
   const normalized = cleanUserText(text);
-  const match = normalized.match(/\b(?:so|mon so|muc|item)\s*(\d{1,3})\b/);
+  const match = normalized.match(/(?:#\s*(\d{1,3})\b)|\b(?:so|so thu|mon|mon so|mon thu|muc|item|thu)\s*(\d{1,3})\b/);
   if (!match) {
     return null;
   }
 
-  const index = Number.parseInt(match[1], 10);
+  const index = Number.parseInt(match[1] || match[2], 10);
   return Number.isInteger(index) && index > 0 ? index : null;
 }
 
@@ -196,7 +212,7 @@ function buildMenuPrompt(menu) {
 function parseFallback(message, menu) {
   const normalized = cleanUserText(message);
 
-  if (/\b(menu|thuc don|danh sach mon|xem mon)\b/.test(normalized)) {
+  if (/\b(menu|thuc don|danh sach mon|xem mon|co mon gi|co gi ngon|goi y mon|quan co gi)\b/.test(normalized)) {
     return {
       intent: "show_menu",
       items: [],
@@ -204,7 +220,7 @@ function parseFallback(message, menu) {
     };
   }
 
-  if (/\b(mo ta|mota|chi tiet mon|gioi thieu mon|thong tin mon)\b/.test(normalized)) {
+  if (/\b(mo ta|mota|chi tiet mon|gioi thieu mon|thong tin mon|review mon)\b/.test(normalized)) {
     return {
       intent: "show_item_description",
       targetIndex: parseTargetIndex(message),
@@ -214,7 +230,7 @@ function parseFallback(message, menu) {
     };
   }
 
-  if (/\b(gia mon|xem gia|bao gia|gia cua mon|gia so|bang gia)\b/.test(normalized)) {
+  if (/\b(gia mon|xem gia|bao gia|gia cua mon|gia so|bang gia|bao nhieu tien|het bao nhieu)\b/.test(normalized)) {
     return {
       intent: "show_item_price",
       targetIndex: parseTargetIndex(message),
@@ -224,7 +240,7 @@ function parseFallback(message, menu) {
     };
   }
 
-  if (/\b(gio hang|xem gio|cart)\b/.test(normalized)) {
+  if (/\b(gio hang|xem gio|cart|gio cua toi|gio con gi|xem don tam)\b/.test(normalized)) {
     return {
       intent: "show_cart",
       items: [],
@@ -232,7 +248,7 @@ function parseFallback(message, menu) {
     };
   }
 
-  if (/\b(checkout|thanh toan|chot don|dat hang)\b/.test(normalized)) {
+  if (/\b(checkout|thanh toan|chot don|dat hang|len don|xac nhan don|giao hang luon)\b/.test(normalized)) {
     const checkoutInfo = {
       customerName: parseCustomerName(message),
       phone: parsePhone(message),
@@ -263,7 +279,7 @@ function parseFallback(message, menu) {
     };
   }
 
-  if (/\b(giao hang cho toi|giao cho toi|ship cho toi|mang den cho toi)\b/.test(normalized)) {
+  if (/\b(giao hang cho toi|giao cho toi|ship cho toi|mang den cho toi|giao toi dia chi)\b/.test(normalized)) {
     const checkoutInfo = {
       customerName: parseCustomerName(message),
       phone: parsePhone(message),
@@ -291,7 +307,7 @@ function parseFallback(message, menu) {
     };
   }
 
-  if (/\b(xoa het gio|xoa gio|clear cart|lam trong gio)\b/.test(normalized)) {
+  if (/\b(xoa het gio|xoa gio|clear cart|lam trong gio|reset gio|huy gio)\b/.test(normalized)) {
     return {
       intent: "clear_cart",
       items: [],
@@ -299,7 +315,7 @@ function parseFallback(message, menu) {
     };
   }
 
-  if (/\b(help|huong dan|tro giup)\b/.test(normalized)) {
+  if (/\b(help|huong dan|tro giup|giup toi|huong dan dat mon|chi toi cach dat)\b/.test(normalized)) {
     return {
       intent: "help",
       items: [],
@@ -307,10 +323,10 @@ function parseFallback(message, menu) {
     };
   }
 
-  if (/\b(chuyen mode|mode|che do)\b/.test(normalized) && /\b(list|ai)\b/.test(normalized)) {
+  if (/\b(chuyen mode|mode|che do|doi che do|ve che do|qua che do)\b/.test(normalized) && /\b(list|ai|nut bam|tu nhien)\b/.test(normalized)) {
     return {
       intent: "switch_mode",
-      mode: /\blist\b/.test(normalized) ? "LIST" : "AI",
+      mode: /\blist\b|\bnut bam\b/.test(normalized) ? "LIST" : "AI",
       items: [],
       missingFields: [],
     };
@@ -346,7 +362,7 @@ function parseFallback(message, menu) {
     };
   }
 
-  const looksLikeUpdate = /\b(giam|bot|xoa|bo|doi|thay)\b/.test(normalized) && /\b(gio|mon|topping)\b/.test(normalized);
+  const looksLikeUpdate = /\b(giam|bot|xoa|bo|doi|thay|tang|them topping|bo topping)\b/.test(normalized) && /\b(gio|mon|topping|dong)\b/.test(normalized);
   if (looksLikeUpdate) {
     return {
       intent: "update_cart",
@@ -440,6 +456,21 @@ async function parseOrderMessage(message, menu) {
           return fallback;
         }
       }
+
+      if (["show_item_description", "show_item_price"].includes(aiResult.intent)) {
+        const hasTarget = Number.isInteger(Number.parseInt(aiResult.targetIndex, 10)) || String(aiResult.targetItemName || "").trim().length > 0;
+        if (!hasTarget) {
+          const fallback = parseFallback(message, menu);
+          if (fallback.intent === aiResult.intent && (fallback.targetIndex || fallback.targetItemName)) {
+            return {
+              ...aiResult,
+              targetIndex: fallback.targetIndex || null,
+              targetItemName: fallback.targetItemName || null,
+            };
+          }
+        }
+      }
+
       return aiResult;
     }
   } catch (error) {
