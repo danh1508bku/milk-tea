@@ -27,10 +27,28 @@ function getAdminKeyboard() {
   return {
     reply_markup: {
       keyboard: [
-        ["Xem đơn hàng", "Xem menu admin"],
+        ["Đơn hàng", "Menu quản lý"],
+        ["Thêm món mới", "Tìm đơn hàng"],
         ["Hướng dẫn admin"],
       ],
       resize_keyboard: true,
+    },
+  };
+}
+
+function buildAdminHomeInlineKeyboard() {
+  return {
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: "Đơn hàng", callback_data: "ad:orders:list:0" },
+          { text: "Menu", callback_data: "ad:menu:list:0" },
+        ],
+        [
+          { text: "Thêm món", callback_data: "ad:menu:add:start" },
+          { text: "Tìm đơn", callback_data: "ad:orders:find:start" },
+        ],
+      ],
     },
   };
 }
@@ -162,8 +180,165 @@ function setupBotHandlers(bot, services) {
     return String(order.chatId) === String(chatId) || isAdminChat(chatId);
   }
 
+  function getAdminFlow(chatId) {
+    const session = sessionService.getSession(chatId);
+    return session && session.data ? session.data.adminFlow || null : null;
+  }
+
+  function saveAdminFlow(chatId, partial) {
+    const current = getAdminFlow(chatId) || {};
+    sessionService.mergeData(chatId, {
+      adminFlow: {
+        ...current,
+        ...partial,
+      },
+    });
+  }
+
+  function clearAdminFlow(chatId) {
+    sessionService.mergeData(chatId, { adminFlow: null });
+  }
+
   function getKeyboardByRole(chatId) {
     return isAdminChat(chatId) ? getAdminKeyboard() : getMainKeyboard();
+  }
+
+  async function denyBuyerFlowForAdmin(chatId) {
+    if (!isAdminChat(chatId)) {
+      return false;
+    }
+
+    await bot.sendMessage(
+      chatId,
+      "Tai khoan admin chi dung chuc nang quan tri. Dung /help de xem lenh quan tri.",
+      getAdminKeyboard()
+    );
+    return true;
+  }
+
+  function buildAdminOrdersKeyboard(orders, page = 0) {
+    const pageSize = 6;
+    const safePage = Math.max(0, page);
+    const start = safePage * pageSize;
+    const current = orders.slice(start, start + pageSize);
+    const rows = current.map((order) => ([{
+      text: `${order.orderCode} | ${order.status} | ${order.totalAmount}đ`,
+      callback_data: `ad:order:view:${order.orderCode}`,
+    }]));
+
+    const navRow = [];
+    if (safePage > 0) {
+      navRow.push({ text: "⬅ Trang trước", callback_data: `ad:orders:list:${safePage - 1}` });
+    }
+    if (start + pageSize < orders.length) {
+      navRow.push({ text: "Trang sau ➡", callback_data: `ad:orders:list:${safePage + 1}` });
+    }
+    if (navRow.length > 0) {
+      rows.push(navRow);
+    }
+
+    rows.push([{ text: "Tìm mã đơn", callback_data: "ad:orders:find:start" }]);
+    rows.push([{ text: "Về bảng điều khiển", callback_data: "ad:home" }]);
+
+    return {
+      reply_markup: {
+        inline_keyboard: rows,
+      },
+    };
+  }
+
+  function buildAdminOrderDetailKeyboard(order) {
+    const rows = [];
+    if (order.status !== orderService.ORDER_STATUS.DELIVERED) {
+      rows.push([{ text: "Xác nhận đã giao", callback_data: `ad:order:delivered:${order.orderCode}` }]);
+    }
+
+    rows.push([
+      { text: "⬅ Danh sách đơn", callback_data: "ad:orders:list:0" },
+      { text: "Về bảng điều khiển", callback_data: "ad:home" },
+    ]);
+
+    return {
+      reply_markup: {
+        inline_keyboard: rows,
+      },
+    };
+  }
+
+  function buildAdminMenuKeyboard(items, page = 0) {
+    const pageSize = 8;
+    const safePage = Math.max(0, page);
+    const start = safePage * pageSize;
+    const current = items.slice(start, start + pageSize);
+    const rows = current.map((item) => ([{
+      text: `${item.itemId} | ${item.name}`,
+      callback_data: `ad:menu:view:${item.itemId}`,
+    }]));
+
+    const navRow = [];
+    if (safePage > 0) {
+      navRow.push({ text: "⬅ Trang trước", callback_data: `ad:menu:list:${safePage - 1}` });
+    }
+    if (start + pageSize < items.length) {
+      navRow.push({ text: "Trang sau ➡", callback_data: `ad:menu:list:${safePage + 1}` });
+    }
+    if (navRow.length > 0) {
+      rows.push(navRow);
+    }
+
+    rows.push([{ text: "Thêm món mới", callback_data: "ad:menu:add:start" }]);
+    rows.push([{ text: "Về bảng điều khiển", callback_data: "ad:home" }]);
+
+    return {
+      reply_markup: {
+        inline_keyboard: rows,
+      },
+    };
+  }
+
+  function buildAdminMenuItemKeyboard(item) {
+    return {
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: "Sửa thông tin", callback_data: `ad:menu:edit:start:${item.itemId}` },
+            { text: "Xóa món", callback_data: `ad:menu:delete:confirm:${item.itemId}` },
+          ],
+          [
+            {
+              text: item.available ? "Đang bán: ON (bấm để tắt)" : "Đang bán: OFF (bấm để bật)",
+              callback_data: `ad:menu:toggle:${item.itemId}`,
+            },
+          ],
+          [
+            { text: "⬅ Danh sách menu", callback_data: "ad:menu:list:0" },
+            { text: "Về bảng điều khiển", callback_data: "ad:home" },
+          ],
+        ],
+      },
+    };
+  }
+
+  function buildAdminMenuEditFieldKeyboard(itemId) {
+    return {
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: "Tên", callback_data: `ad:menu:editfield:${itemId}:name` },
+            { text: "Danh mục", callback_data: `ad:menu:editfield:${itemId}:category` },
+          ],
+          [
+            { text: "Giá M", callback_data: `ad:menu:editfield:${itemId}:priceM` },
+            { text: "Giá L", callback_data: `ad:menu:editfield:${itemId}:priceL` },
+          ],
+          [
+            { text: "Mô tả", callback_data: `ad:menu:editfield:${itemId}:description` },
+            { text: "Đang bán", callback_data: `ad:menu:editfield:${itemId}:available` },
+          ],
+          [{ text: "⬅ Quay lại món", callback_data: `ad:menu:view:${itemId}` }],
+        ],
+      },
+    };
   }
 
   function safe(handler) {
@@ -359,9 +534,171 @@ function setupBotHandlers(bot, services) {
         "",
         "Field cho /menuedit: name, category, description, price_m, price_l, available",
         "Category hop le: Trà Sữa, Trà Trái Cây, Cà Phê, Đá Xay, Topping",
+        "",
+        "Meo dung nhanh: thay vi go lenh, ban co the bam cac nut trong giao dien admin.",
       ].join("\n"),
       getAdminKeyboard()
     );
+  }
+
+  async function sendAdminDashboard(chatId, title = "Bảng điều khiển admin") {
+    clearAdminFlow(chatId);
+    await bot.sendMessage(chatId, title, getAdminKeyboard());
+    await bot.sendMessage(chatId, "Chọn thao tác bên dưới:", buildAdminHomeInlineKeyboard());
+  }
+
+  async function sendAdminOrdersList(chatId, page = 0) {
+    const orders = await orderService.listOrders();
+    if (!orders.length) {
+      await bot.sendMessage(chatId, "Chưa có đơn hàng nào.", getAdminKeyboard());
+      return;
+    }
+
+    await bot.sendMessage(
+      chatId,
+      "Danh sách đơn hàng (bấm vào mã đơn để xem chi tiết):",
+      buildAdminOrdersKeyboard(orders, page)
+    );
+  }
+
+  async function sendAdminOrderDetail(chatId, orderCode) {
+    const order = await orderService.getOrderByCode(orderCode);
+    if (!order) {
+      await bot.sendMessage(chatId, `Không tìm thấy đơn ${orderCode}.`, getAdminKeyboard());
+      return;
+    }
+
+    const detail = buildAdminOrderDetail(order);
+    await bot.sendMessage(chatId, detail, buildAdminOrderDetailKeyboard(order));
+  }
+
+  async function sendAdminMenuList(chatId, page = 0) {
+    const items = menuService.getMenu();
+    if (!items.length) {
+      await bot.sendMessage(chatId, "Menu đang trống.", getAdminKeyboard());
+      return;
+    }
+
+    await bot.sendMessage(
+      chatId,
+      "Danh sách menu (bấm vào món để xem/sửa/xóa):",
+      buildAdminMenuKeyboard(items, page)
+    );
+  }
+
+  async function sendAdminMenuItemDetail(chatId, itemId) {
+    const item = menuService.getItemByCode(itemId);
+    if (!item) {
+      await bot.sendMessage(chatId, `Không tìm thấy món ${itemId}.`, getAdminKeyboard());
+      return;
+    }
+
+    const lines = [
+      `${item.itemId} | ${item.name}`,
+      `Danh mục: ${item.category}`,
+      `Giá M: ${item.priceM}đ`,
+      `Giá L: ${item.priceL}đ`,
+      `Đang bán: ${item.available ? "ON" : "OFF"}`,
+      `Mô tả: ${item.description || "(trống)"}`,
+    ];
+
+    await bot.sendMessage(chatId, lines.join("\n"), buildAdminMenuItemKeyboard(item));
+  }
+
+  async function handleAdminFlowInput(chatId, text) {
+    const flow = getAdminFlow(chatId);
+    if (!flow || !flow.action) {
+      return false;
+    }
+
+    if (flow.action === "FIND_ORDER") {
+      clearAdminFlow(chatId);
+      await sendAdminOrderDetail(chatId, String(text || "").trim().toUpperCase());
+      return true;
+    }
+
+    if (flow.action === "ADD_MENU") {
+      const draft = { ...(flow.draft || {}) };
+      const step = flow.step || "itemId";
+      const orderedSteps = ["itemId", "name", "category", "priceM", "priceL", "available", "description"];
+
+      draft[step] = text;
+      const currentIndex = orderedSteps.indexOf(step);
+      const nextStep = currentIndex >= 0 && currentIndex < orderedSteps.length - 1 ? orderedSteps[currentIndex + 1] : null;
+
+      if (nextStep) {
+        saveAdminFlow(chatId, { action: "ADD_MENU", step: nextStep, draft });
+        const questions = {
+          itemId: "Nhập mã món (VD: TS20)",
+          name: "Nhập tên món",
+          category: "Nhập danh mục (Trà Sữa, Trà Trái Cây, Cà Phê, Đá Xay, Topping)",
+          priceM: "Nhập giá size M (số nguyên)",
+          priceL: "Nhập giá size L (số nguyên)",
+          available: "Đang bán? nhập true hoặc false",
+          description: "Nhập mô tả ngắn cho món",
+        };
+        await bot.sendMessage(chatId, questions[nextStep], getAdminKeyboard());
+        return true;
+      }
+
+      const created = menuService.addMenuItem({
+        itemId: draft.itemId,
+        name: draft.name,
+        category: draft.category,
+        priceM: draft.priceM,
+        priceL: draft.priceL,
+        available: draft.available,
+        description: draft.description,
+      });
+
+      if (!created.ok) {
+        clearAdminFlow(chatId);
+        await bot.sendMessage(chatId, `Tạo món thất bại: ${created.error}`, getAdminKeyboard());
+        await sendAdminDashboard(chatId, "Bạn có thể thử lại bằng nút Thêm món mới");
+        return true;
+      }
+
+      try {
+        await menuService.saveMenuToCsv();
+      } catch (error) {
+        clearAdminFlow(chatId);
+        await bot.sendMessage(chatId, `Đã tạo món nhưng lưu CSV thất bại: ${error.message}`, getAdminKeyboard());
+        return true;
+      }
+
+      clearAdminFlow(chatId);
+      await bot.sendMessage(chatId, `Đã thêm món ${created.item.itemId} - ${created.item.name}.`, getAdminKeyboard());
+      await sendAdminMenuItemDetail(chatId, created.item.itemId);
+      return true;
+    }
+
+    if (flow.action === "EDIT_MENU_FIELD") {
+      const itemId = flow.itemId;
+      const field = flow.field;
+      const updatePayload = { [field]: text };
+
+      const updated = menuService.updateMenuItem(itemId, updatePayload);
+      if (!updated.ok) {
+        clearAdminFlow(chatId);
+        await bot.sendMessage(chatId, `Cập nhật thất bại: ${updated.error}`, getAdminKeyboard());
+        return true;
+      }
+
+      try {
+        await menuService.saveMenuToCsv();
+      } catch (error) {
+        clearAdminFlow(chatId);
+        await bot.sendMessage(chatId, `Đã cập nhật nhưng lưu CSV thất bại: ${error.message}`, getAdminKeyboard());
+        return true;
+      }
+
+      clearAdminFlow(chatId);
+      await bot.sendMessage(chatId, `Đã cập nhật ${updated.item.itemId}.`, getAdminKeyboard());
+      await sendAdminMenuItemDetail(chatId, updated.item.itemId);
+      return true;
+    }
+
+    return false;
   }
 
   async function sendAdminMenu(chatId) {
@@ -808,14 +1145,13 @@ function setupBotHandlers(bot, services) {
     const mode = getChatMode(msg.chat.id);
 
     if (isAdmin) {
-      await bot.sendMessage(
+      await sendAdminDashboard(
         msg.chat.id,
         [
           "Chao admin.",
           "Ban dang o giao dien quan ly don/menu.",
-          "Nhan 'Huong dan admin' hoac dung /help de xem lenh.",
-        ].join("\n"),
-        getAdminKeyboard()
+          "Ban co the bam nut, khong can nho cau lenh.",
+        ].join("\n")
       );
       return;
     }
@@ -878,6 +1214,10 @@ function setupBotHandlers(bot, services) {
     const inputMode = match && match[1] ? String(match[1]).toUpperCase() : "";
     logCommand(chatId, "/mode", inputMode);
 
+    if (await denyBuyerFlowForAdmin(chatId)) {
+      return;
+    }
+
     if (!inputMode) {
       const currentMode = getChatMode(chatId);
       await sendModePicker(
@@ -921,14 +1261,24 @@ function setupBotHandlers(bot, services) {
   }));
 
   bot.onText(/^\/menu$/i, safe(async (msg) => {
-    logCommand(msg.chat.id, "/menu");
-    await sendMenu(msg.chat.id);
+    const chatId = msg.chat.id;
+    logCommand(chatId, "/menu");
+
+    if (await denyBuyerFlowForAdmin(chatId)) {
+      return;
+    }
+
+    await sendMenu(chatId);
   }));
 
   bot.onText(/^\/add(?:\s+(.+))?$/i, safe(async (msg, match) => {
     const chatId = msg.chat.id;
     const addArgs = match && match[1] ? match[1] : "";
     logCommand(chatId, "/add", addArgs);
+
+    if (await denyBuyerFlowForAdmin(chatId)) {
+      return;
+    }
 
     if (!addArgs) {
       await bot.sendMessage(
@@ -999,14 +1349,24 @@ function setupBotHandlers(bot, services) {
   }));
 
   bot.onText(/^\/cart$/i, safe(async (msg) => {
-    logCommand(msg.chat.id, "/cart");
-    await sendCart(msg.chat.id);
+    const chatId = msg.chat.id;
+    logCommand(chatId, "/cart");
+
+    if (await denyBuyerFlowForAdmin(chatId)) {
+      return;
+    }
+
+    await sendCart(chatId);
   }));
 
   bot.onText(/^\/remove(?:\s+(\d+))?$/i, safe(async (msg, match) => {
     const chatId = msg.chat.id;
     const lineText = match && match[1] ? match[1] : "";
     logCommand(chatId, "/remove", lineText);
+
+    if (await denyBuyerFlowForAdmin(chatId)) {
+      return;
+    }
 
     if (!lineText) {
       await bot.sendMessage(chatId, "Sai cu phap. Dung: /remove <line_number>. Vi du: /remove 2");
@@ -1026,19 +1386,36 @@ function setupBotHandlers(bot, services) {
   }));
 
   bot.onText(/^\/clearcart$/i, safe(async (msg) => {
-    logCommand(msg.chat.id, "/clearcart");
-    cartService.clearCart(msg.chat.id);
-    await bot.sendMessage(msg.chat.id, "Da xoa toan bo gio hang.", getMainKeyboard());
+    const chatId = msg.chat.id;
+    logCommand(chatId, "/clearcart");
+
+    if (await denyBuyerFlowForAdmin(chatId)) {
+      return;
+    }
+
+    cartService.clearCart(chatId);
+    await bot.sendMessage(chatId, "Da xoa toan bo gio hang.", getMainKeyboard());
   }));
 
   bot.onText(/^\/checkout$/i, safe(async (msg) => {
-    logCommand(msg.chat.id, "/checkout");
-    await startCheckout(msg.chat.id);
+    const chatId = msg.chat.id;
+    logCommand(chatId, "/checkout");
+
+    if (await denyBuyerFlowForAdmin(chatId)) {
+      return;
+    }
+
+    await startCheckout(chatId);
   }));
 
   bot.onText(/^\/cancel$/i, safe(async (msg) => {
     const chatId = msg.chat.id;
     logCommand(chatId, "/cancel");
+
+    if (await denyBuyerFlowForAdmin(chatId)) {
+      return;
+    }
+
     const state = sessionService.getSession(chatId).state;
 
     if (state === STATES.IDLE) {
@@ -1053,6 +1430,11 @@ function setupBotHandlers(bot, services) {
   bot.onText(/^\/confirm$/i, safe(async (msg) => {
     const chatId = msg.chat.id;
     logCommand(chatId, "/confirm");
+
+    if (await denyBuyerFlowForAdmin(chatId)) {
+      return;
+    }
+
     const session = sessionService.getSession(chatId);
 
     if (session.state !== STATES.CONFIRMING_ORDER) {
@@ -1123,14 +1505,7 @@ function setupBotHandlers(bot, services) {
       return;
     }
 
-    const orders = await orderService.listOrders();
-    if (orders.length === 0) {
-      await bot.sendMessage(chatId, "Chua co don hang nao", getAdminKeyboard());
-      return;
-    }
-
-    const lines = orders.map((order) => formatAdminOrderLine(order));
-    await bot.sendMessage(chatId, lines.join("\n"), getAdminKeyboard());
+    await sendAdminOrdersList(chatId, 0);
   }));
 
   bot.onText(/^\/order(?:\s+([A-Za-z0-9]+))?$/i, safe(async (msg, match) => {
@@ -1155,13 +1530,17 @@ function setupBotHandlers(bot, services) {
     }
 
     const detail = buildAdminOrderDetail(order);
-    await bot.sendMessage(chatId, detail, getAdminKeyboard());
+    await bot.sendMessage(chatId, detail, buildAdminOrderDetailKeyboard(order));
   }));
 
   bot.onText(/^\/cod(?:\s+([A-Za-z0-9]+))?$/i, safe(async (msg, match) => {
     const chatId = msg.chat.id;
     const orderCode = match && match[1] ? String(match[1]).toUpperCase() : "";
     logCommand(chatId, "/cod", orderCode);
+
+    if (await denyBuyerFlowForAdmin(chatId)) {
+      return;
+    }
 
     if (!orderCode) {
       await bot.sendMessage(chatId, "Sai cu phap. Dung: /cod <orderCode>");
@@ -1193,6 +1572,10 @@ function setupBotHandlers(bot, services) {
     const chatId = msg.chat.id;
     const orderCode = match && match[1] ? String(match[1]).toUpperCase() : "";
     logCommand(chatId, "/qr", orderCode);
+
+    if (await denyBuyerFlowForAdmin(chatId)) {
+      return;
+    }
 
     if (!orderCode) {
       await bot.sendMessage(chatId, "Sai cu phap. Dung: /qr <orderCode>");
@@ -1234,6 +1617,10 @@ function setupBotHandlers(bot, services) {
     const chatId = msg.chat.id;
     const orderCode = match && match[1] ? String(match[1]).toUpperCase() : "";
     logCommand(chatId, "/pay", orderCode);
+
+    if (await denyBuyerFlowForAdmin(chatId)) {
+      return;
+    }
 
     if (!orderCode) {
       await bot.sendMessage(chatId, "Sai cu phap. Dung: /pay <orderCode>");
@@ -1403,6 +1790,10 @@ function setupBotHandlers(bot, services) {
     const content = match && match[1] ? match[1] : "";
     logCommand(chatId, "/ai", content);
 
+    if (await denyBuyerFlowForAdmin(chatId)) {
+      return;
+    }
+
     if (getChatMode(chatId) !== MODES.AI) {
       await bot.sendMessage(chatId, "Hien dang o che do LIST. Dung /mode ai de bat AI mode truoc.");
       return;
@@ -1422,8 +1813,233 @@ function setupBotHandlers(bot, services) {
   bot.on("callback_query", async (query) => {
     const chatId = query && query.message && query.message.chat ? query.message.chat.id : null;
     const data = String(query.data || "");
+    const messageId = query && query.message ? query.message.message_id : null;
 
-    if (!chatId || !data.startsWith("lf:")) {
+    if (!chatId || (!data.startsWith("lf:") && !data.startsWith("ad:"))) {
+      return;
+    }
+
+    if (data.startsWith("ad:")) {
+      if (!isAdminChat(chatId)) {
+        try {
+          await bot.answerCallbackQuery(query.id, { text: "Bạn không có quyền quản trị.", show_alert: true });
+        } catch (error) {
+          logEvent("CALLBACK_ANSWER_FAILED", { chatId, reason: error.message });
+        }
+        return;
+      }
+
+      try {
+        const parts = data.split(":");
+        const group = parts[1] || "";
+        const action = parts[2] || "";
+
+        if (group === "home") {
+          await bot.answerCallbackQuery(query.id);
+          await sendAdminDashboard(chatId);
+          return;
+        }
+
+        if (group === "orders" && action === "list") {
+          const page = Number.parseInt(parts[3], 10) || 0;
+          await bot.answerCallbackQuery(query.id);
+          await sendAdminOrdersList(chatId, page);
+          return;
+        }
+
+        if (group === "orders" && action === "find") {
+          await bot.answerCallbackQuery(query.id);
+          saveAdminFlow(chatId, { action: "FIND_ORDER" });
+          await bot.sendMessage(chatId, "Nhập mã đơn cần tìm (VD: ORDER0001)", getAdminKeyboard());
+          return;
+        }
+
+        if (group === "order" && action === "view") {
+          const orderCode = String(parts[3] || "").toUpperCase();
+          await bot.answerCallbackQuery(query.id);
+          await sendAdminOrderDetail(chatId, orderCode);
+          return;
+        }
+
+        if (group === "order" && action === "delivered") {
+          const orderCode = String(parts[3] || "").toUpperCase();
+          const updated = await orderService.markOrderDelivered(orderCode);
+          await bot.answerCallbackQuery(query.id);
+
+          if (!updated) {
+            await bot.sendMessage(chatId, `Không tìm thấy đơn ${orderCode}.`, getAdminKeyboard());
+            return;
+          }
+
+          await bot.sendMessage(chatId, `Đã xác nhận đơn ${orderCode} đã giao.`, getAdminKeyboard());
+          if (String(updated.chatId) !== String(chatId)) {
+            await bot.sendMessage(updated.chatId, `Đơn ${orderCode} của bạn đã được giao thành công.`);
+          }
+          await sendAdminOrderDetail(chatId, orderCode);
+          return;
+        }
+
+        if (group === "menu" && action === "list") {
+          const page = Number.parseInt(parts[3], 10) || 0;
+          await bot.answerCallbackQuery(query.id);
+          await sendAdminMenuList(chatId, page);
+          return;
+        }
+
+        if (group === "menu" && action === "view") {
+          const itemId = parts[3] || "";
+          await bot.answerCallbackQuery(query.id);
+          await sendAdminMenuItemDetail(chatId, itemId);
+          return;
+        }
+
+        if (group === "menu" && action === "toggle") {
+          const itemId = parts[3] || "";
+          const item = menuService.getItemByCode(itemId);
+          await bot.answerCallbackQuery(query.id);
+
+          if (!item) {
+            await bot.sendMessage(chatId, `Không tìm thấy món ${itemId}.`, getAdminKeyboard());
+            return;
+          }
+
+          const updated = menuService.updateMenuItem(itemId, { available: !item.available });
+          if (!updated.ok) {
+            await bot.sendMessage(chatId, `Không cập nhật được món: ${updated.error}`, getAdminKeyboard());
+            return;
+          }
+
+          try {
+            await menuService.saveMenuToCsv();
+          } catch (error) {
+            await bot.sendMessage(chatId, `Đã đổi trạng thái nhưng lưu CSV thất bại: ${error.message}`, getAdminKeyboard());
+            return;
+          }
+
+          await sendAdminMenuItemDetail(chatId, itemId);
+          return;
+        }
+
+        if (group === "menu" && action === "add") {
+          await bot.answerCallbackQuery(query.id);
+          saveAdminFlow(chatId, { action: "ADD_MENU", step: "itemId", draft: {} });
+          await bot.sendMessage(chatId, "Nhập mã món mới (VD: TS20)", getAdminKeyboard());
+          return;
+        }
+
+        if (group === "menu" && action === "edit") {
+          const itemId = parts[4] || "";
+          await bot.answerCallbackQuery(query.id);
+
+          const item = menuService.getItemByCode(itemId);
+          if (!item) {
+            await bot.sendMessage(chatId, `Không tìm thấy món ${itemId}.`, getAdminKeyboard());
+            return;
+          }
+
+          await bot.sendMessage(
+            chatId,
+            `Chọn trường cần sửa cho ${item.itemId} - ${item.name}`,
+            buildAdminMenuEditFieldKeyboard(item.itemId)
+          );
+          return;
+        }
+
+        if (group === "menu" && action === "editfield") {
+          const itemId = parts[3] || "";
+          const field = parts[4] || "";
+          await bot.answerCallbackQuery(query.id);
+
+          const validFields = ["name", "category", "priceM", "priceL", "description", "available"];
+          if (!validFields.includes(field)) {
+            await bot.sendMessage(chatId, "Trường sửa không hợp lệ.", getAdminKeyboard());
+            return;
+          }
+
+          saveAdminFlow(chatId, { action: "EDIT_MENU_FIELD", itemId, field });
+          await bot.sendMessage(chatId, `Nhập giá trị mới cho ${field}:`, getAdminKeyboard());
+          return;
+        }
+
+        if (group === "menu" && action === "delete") {
+          const subAction = parts[3] || "";
+          const itemId = parts[4] || "";
+
+          if (subAction === "confirm") {
+            await bot.answerCallbackQuery(query.id);
+            await bot.sendMessage(
+              chatId,
+              `Bạn có chắc muốn xóa món ${itemId}?`,
+              {
+                reply_markup: {
+                  inline_keyboard: [
+                    [
+                      { text: "✅ Xóa", callback_data: `ad:menu:delete:do:${itemId}` },
+                      { text: "❌ Hủy", callback_data: `ad:menu:view:${itemId}` },
+                    ],
+                  ],
+                },
+              }
+            );
+            return;
+          }
+
+          if (subAction === "do") {
+            await bot.answerCallbackQuery(query.id);
+            const removed = menuService.removeMenuItem(itemId);
+            if (!removed.ok) {
+              await bot.sendMessage(chatId, removed.error, getAdminKeyboard());
+              return;
+            }
+
+            try {
+              await menuService.saveMenuToCsv();
+            } catch (error) {
+              await bot.sendMessage(chatId, `Đã xóa món nhưng lưu CSV thất bại: ${error.message}`, getAdminKeyboard());
+              return;
+            }
+
+            await bot.sendMessage(chatId, `Đã xóa món ${itemId}.`, getAdminKeyboard());
+            await sendAdminMenuList(chatId, 0);
+            return;
+          }
+        }
+
+        await bot.answerCallbackQuery(query.id);
+        return;
+      } catch (error) {
+        logEvent("ADMIN_CALLBACK_ERROR", {
+          chatId,
+          messageId,
+          data,
+          message: error.message,
+          stack: error.stack,
+        });
+        try {
+          await bot.answerCallbackQuery(query.id, { text: "Đã có lỗi, vui lòng thử lại." });
+        } catch (answerError) {
+          logEvent("CALLBACK_ANSWER_FAILED", { chatId, reason: answerError.message });
+        }
+        await bot.sendMessage(chatId, "Có lỗi khi xử lý thao tác admin.", getAdminKeyboard());
+        return;
+      }
+    }
+
+    if (isAdminChat(chatId)) {
+      try {
+        await bot.answerCallbackQuery(query.id, {
+          text: "Admin khong dung luong dat hang.",
+          show_alert: false,
+        });
+      } catch (error) {
+        logEvent("CALLBACK_ANSWER_FAILED", { chatId, reason: error.message });
+      }
+
+      await bot.sendMessage(
+        chatId,
+        "Tai khoan admin chi quan ly don/menu. Dung /help de xem lenh quan tri.",
+        getAdminKeyboard()
+      );
       return;
     }
 
@@ -1669,6 +2285,45 @@ function setupBotHandlers(bot, services) {
       return;
     }
 
+    if (isAdminChat(chatId)) {
+      if (text === "Đơn hàng") {
+        await sendAdminOrdersList(chatId, 0);
+        return;
+      }
+
+      if (text === "Menu quản lý") {
+        await sendAdminMenuList(chatId, 0);
+        return;
+      }
+
+      if (text === "Thêm món mới") {
+        saveAdminFlow(chatId, { action: "ADD_MENU", step: "itemId", draft: {} });
+        await bot.sendMessage(chatId, "Nhập mã món mới (VD: TS20)", getAdminKeyboard());
+        return;
+      }
+
+      if (text === "Tìm đơn hàng") {
+        saveAdminFlow(chatId, { action: "FIND_ORDER" });
+        await bot.sendMessage(chatId, "Nhập mã đơn cần tìm (VD: ORDER0001)", getAdminKeyboard());
+        return;
+      }
+
+      if (text === "Hướng dẫn admin") {
+        await sendAdminHelp(chatId);
+        return;
+      }
+
+      const consumedByAdminFlow = await handleAdminFlowInput(chatId, text);
+      if (consumedByAdminFlow) {
+        return;
+      }
+    }
+
+    if (isAdminChat(chatId) && ["Xem menu", "Xem giỏ hàng", "Checkout", "Chế độ LIST", "Chế độ AI"].includes(text)) {
+      await denyBuyerFlowForAdmin(chatId);
+      return;
+    }
+
     if (text === "Xem menu") {
       await sendMenu(chatId);
       return;
@@ -1680,13 +2335,7 @@ function setupBotHandlers(bot, services) {
         return;
       }
 
-      const orders = await orderService.listOrders();
-      if (!orders.length) {
-        await bot.sendMessage(chatId, "Chua co don hang nao", getAdminKeyboard());
-        return;
-      }
-
-      await bot.sendMessage(chatId, orders.map((order) => formatAdminOrderLine(order)).join("\n"), getAdminKeyboard());
+      await sendAdminOrdersList(chatId, 0);
       return;
     }
 
@@ -1696,7 +2345,7 @@ function setupBotHandlers(bot, services) {
         return;
       }
 
-      await sendAdminMenu(chatId);
+      await sendAdminMenuList(chatId, 0);
       return;
     }
 
@@ -1752,6 +2401,15 @@ function setupBotHandlers(bot, services) {
     }
 
     if (text.startsWith("/")) {
+      return;
+    }
+
+    if (isAdminChat(chatId)) {
+      await bot.sendMessage(
+        chatId,
+        "Admin chi dung chuc nang quan tri. Dung /help de xem cac lenh quan tri.",
+        getAdminKeyboard()
+      );
       return;
     }
 
