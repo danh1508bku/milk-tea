@@ -32,6 +32,19 @@ function buildPayOsSignature(data, checksumKey) {
   return crypto.createHmac("sha256", checksumKey).update(signData).digest("hex");
 }
 
+function buildPayOsCreateSignature(paymentRequest, checksumKey) {
+  // PayOS create payment signature must follow this exact canonical order.
+  const signData = [
+    `amount=${paymentRequest.amount}`,
+    `cancelUrl=${paymentRequest.cancelUrl}`,
+    `description=${paymentRequest.description}`,
+    `orderCode=${paymentRequest.orderCode}`,
+    `returnUrl=${paymentRequest.returnUrl}`,
+  ].join("&");
+
+  return crypto.createHmac("sha256", checksumKey).update(signData).digest("hex");
+}
+
 function generatePayOsOrderCode(order) {
   // Keep it numeric and sufficiently unique to avoid duplicate orderCode on PayOS.
   payOsOrderSeed = (payOsOrderSeed + 1) % 900000;
@@ -69,7 +82,7 @@ async function createPayOsPaymentLink(order) {
     expiredAt: Math.floor(Date.now() / 1000) + 15 * 60,
   };
 
-  const signature = buildPayOsSignature(paymentRequest, process.env.PAYOS_CHECKSUM_KEY);
+  const signature = buildPayOsCreateSignature(paymentRequest, process.env.PAYOS_CHECKSUM_KEY);
 
   let response;
   try {
