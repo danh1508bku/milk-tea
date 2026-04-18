@@ -44,6 +44,58 @@ function parseSize(text) {
   return (sizeMatch[1] || sizeMatch[2] || "").toUpperCase() || null;
 }
 
+function parsePhone(text) {
+  const compact = String(text || "")
+    .replace(/[^0-9+]/g, "")
+    .replace(/^\+84/, "0")
+    .replace(/^84/, "0");
+
+  const match = compact.match(/0\d{9}/);
+  return match ? match[0] : null;
+}
+
+function parseDeliveryMethodFromText(text) {
+  const normalized = cleanUserText(text);
+  if (/\b(giao hang|delivery|ship|ship hang|mang den)\b/.test(normalized)) {
+    return "delivery";
+  }
+
+  if (/\b(pickup|nhan tai quan|lay tai quan|den lay)\b/.test(normalized)) {
+    return "pickup";
+  }
+
+  return null;
+}
+
+function parseAddress(text) {
+  const raw = String(text || "");
+  const markerMatch = raw.match(/(?:dia\s*chi|địa\s*chỉ)\s*[:\-]?\s*(.+)$/i);
+  if (markerMatch && markerMatch[1]) {
+    return markerMatch[1].trim();
+  }
+
+  if (/\b(giao hang|delivery|ship)\b/i.test(raw) && raw.trim().length > 12) {
+    return raw.trim();
+  }
+
+  return "";
+}
+
+function parseCustomerName(text) {
+  const raw = String(text || "").trim();
+  const byMarker = raw.match(/(?:ten|tên)\s*(?:toi|tôi|nguoi nhan|người nhận)?\s*[:\-]?\s*([\p{L}\s]{2,40})/iu);
+  if (byMarker && byMarker[1]) {
+    return byMarker[1].trim();
+  }
+
+  const byIntro = raw.match(/(?:toi la|tôi là|mình là)\s+([\p{L}\s]{2,40})/iu);
+  if (byIntro && byIntro[1]) {
+    return byIntro[1].trim();
+  }
+
+  return "";
+}
+
 function scoreByTokenOverlap(userText, itemName) {
   const stopWords = new Set([
     "cho",
@@ -132,6 +184,106 @@ function buildMenuPrompt(menu) {
 
 function parseFallback(message, menu) {
   const normalized = cleanUserText(message);
+
+  if (/\b(menu|thuc don|danh sach mon|xem mon)\b/.test(normalized)) {
+    return {
+      intent: "show_menu",
+      items: [],
+      missingFields: [],
+    };
+  }
+
+  if (/\b(gio hang|xem gio|cart)\b/.test(normalized)) {
+    return {
+      intent: "show_cart",
+      items: [],
+      missingFields: [],
+    };
+  }
+
+  if (/\b(checkout|thanh toan|chot don|dat hang)\b/.test(normalized)) {
+    const checkoutInfo = {
+      customerName: parseCustomerName(message),
+      phone: parsePhone(message),
+      deliveryMethod: parseDeliveryMethodFromText(message),
+      address: parseAddress(message),
+      note: "",
+    };
+
+    const missingFields = [];
+    if (!checkoutInfo.customerName) {
+      missingFields.push("customerName");
+    }
+    if (!checkoutInfo.phone) {
+      missingFields.push("phone");
+    }
+    if (!checkoutInfo.deliveryMethod) {
+      missingFields.push("deliveryMethod");
+    }
+    if (checkoutInfo.deliveryMethod === "delivery" && !checkoutInfo.address) {
+      missingFields.push("address");
+    }
+
+    return {
+      intent: "checkout",
+      checkoutInfo,
+      items: [],
+      missingFields,
+    };
+  }
+
+  if (/\b(giao hang cho toi|giao cho toi|ship cho toi|mang den cho toi)\b/.test(normalized)) {
+    const checkoutInfo = {
+      customerName: parseCustomerName(message),
+      phone: parsePhone(message),
+      deliveryMethod: "delivery",
+      address: parseAddress(message),
+      note: "",
+    };
+
+    const missingFields = [];
+    if (!checkoutInfo.customerName) {
+      missingFields.push("customerName");
+    }
+    if (!checkoutInfo.phone) {
+      missingFields.push("phone");
+    }
+    if (!checkoutInfo.address) {
+      missingFields.push("address");
+    }
+
+    return {
+      intent: "checkout",
+      checkoutInfo,
+      items: [],
+      missingFields,
+    };
+  }
+
+  if (/\b(xoa het gio|xoa gio|clear cart|lam trong gio)\b/.test(normalized)) {
+    return {
+      intent: "clear_cart",
+      items: [],
+      missingFields: [],
+    };
+  }
+
+  if (/\b(help|huong dan|tro giup)\b/.test(normalized)) {
+    return {
+      intent: "help",
+      items: [],
+      missingFields: [],
+    };
+  }
+
+  if (/\b(chuyen mode|mode|che do)\b/.test(normalized) && /\b(list|ai)\b/.test(normalized)) {
+    return {
+      intent: "switch_mode",
+      mode: /\blist\b/.test(normalized) ? "LIST" : "AI",
+      items: [],
+      missingFields: [],
+    };
+  }
   const segments = normalized.split(/\bva\b|,|\bvoi\b/).map((part) => part.trim()).filter(Boolean);
   const candidates = segments.length > 1 ? segments : [message];
   const items = [];
@@ -195,7 +347,8 @@ async function parseWithOpenAi(message, menu) {
           [
             "Ban la parser dat mon cho quan tra sua.",
             "Tra ve DUY NHAT JSON hop le voi schema {intent, items, missingFields}.",
-            "intent hop le: add_to_cart | update_cart | checkout | unknown.",
+            "intent hop le: add_to_cart | update_cart | checkout | show_menu | show_cart | clear_cart | help | switch_mode | unknown.",
+            "Voi intent checkout, tra ve them checkoutInfo: {customerName, phone, deliveryMethod, address, note} va missingFields cho cac truong con thieu.",
             "items la danh sach thao tac, moi phan tu co the co:",
             "- action: add | set_quantity | remove | add_toppings | remove_toppings | replace_toppings",
             "- itemId, itemName: mon can them",
@@ -204,6 +357,7 @@ async function parseWithOpenAi(message, menu) {
             "- quantity: so nguyen >= 0 (0 nghia la xoa mon)",
             "- toppings: mang ten topping",
             "- note: ghi chu",
+            "- mode: LIST|AI (chi dung voi intent switch_mode)",
             "Quan trong: neu khach noi nhieu mon trong 1 cau (co 'va'), phai tra nhieu phan tu trong items.",
             "Khong tinh tien. Khong tao mon khong co trong menu.",
           ].join(" "),
@@ -227,6 +381,8 @@ async function parseWithOpenAi(message, menu) {
 
   return {
     intent: output.intent || "unknown",
+    mode: output.mode || null,
+    checkoutInfo: output.checkoutInfo && typeof output.checkoutInfo === "object" ? output.checkoutInfo : null,
     items: Array.isArray(output.items) ? output.items : [],
     missingFields: Array.isArray(output.missingFields) ? output.missingFields : [],
   };
@@ -251,7 +407,15 @@ async function parseOrderMessage(message, menu) {
 }
 
 const AI_OUTPUT_SCHEMA = {
-  intent: "add_to_cart | update_cart | checkout | unknown",
+  intent: "add_to_cart | update_cart | checkout | show_menu | show_cart | clear_cart | help | switch_mode | unknown",
+  mode: "LIST | AI",
+  checkoutInfo: {
+    customerName: "string",
+    phone: "string",
+    deliveryMethod: "pickup|delivery",
+    address: "string",
+    note: "string",
+  },
   items: [
     {
       action: "add | set_quantity | remove | add_toppings | remove_toppings | replace_toppings",

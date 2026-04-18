@@ -1128,13 +1128,65 @@ function setupBotHandlers(bot, services) {
       return false;
     }
 
-    const supportedIntents = ["add_to_cart", "update_cart", "checkout"];
+    const supportedIntents = [
+      "add_to_cart",
+      "update_cart",
+      "checkout",
+      "show_menu",
+      "show_cart",
+      "clear_cart",
+      "help",
+      "switch_mode",
+    ];
     if (!supportedIntents.includes(parsed.intent)) {
       return false;
     }
 
+    if (parsed.intent === "show_menu") {
+      await sendMenu(chatId);
+      return true;
+    }
+
+    if (parsed.intent === "show_cart") {
+      await sendCart(chatId);
+      return true;
+    }
+
+    if (parsed.intent === "clear_cart") {
+      cartService.clearCart(chatId);
+      await bot.sendMessage(chatId, "Mình đã xóa toàn bộ giỏ hàng cho bạn.", getAiPostActionKeyboard());
+      return true;
+    }
+
+    if (parsed.intent === "help") {
+      await bot.sendMessage(
+        chatId,
+        "Bạn có thể nhắn tự nhiên như: 'xem menu', 'xem giỏ hàng', 'checkout', 'giảm mocha còn 1', 'đổi topping trân châu cho mocha'.",
+        getAiPostActionKeyboard()
+      );
+      return true;
+    }
+
+    if (parsed.intent === "switch_mode") {
+      const nextMode = String(parsed.mode || "").toUpperCase() === "LIST" ? MODES.LIST : MODES.AI;
+      const result = sessionService.setMode(chatId, nextMode);
+      if (!result.ok) {
+        await bot.sendMessage(chatId, result.error, getAiPostActionKeyboard());
+        return true;
+      }
+
+      if (result.mode === MODES.LIST) {
+        await bot.sendMessage(chatId, "Mình đã chuyển sang chế độ LIST.");
+        await sendListMenu(chatId);
+        return true;
+      }
+
+      await bot.sendMessage(chatId, "Mình đã chuyển sang chế độ AI. Bạn cứ chat tự nhiên nhé.", getAiPostActionKeyboard());
+      return true;
+    }
+
     if (parsed.intent === "checkout") {
-      await startCheckout(chatId);
+      await startCheckoutFromAi(chatId, parsed);
       return true;
     }
 
@@ -1340,6 +1392,93 @@ function setupBotHandlers(bot, services) {
     sessionService.setState(chatId, STATES.WAITING_NAME);
 
     await bot.sendMessage(chatId, "Nhap ten nguoi nhan: ");
+  }
+
+  function mapMissingFieldLabel(field) {
+    const map = {
+      customerName: "ten nguoi nhan",
+      phone: "so dien thoai",
+      deliveryMethod: "hinh thuc nhan hang",
+      address: "dia chi giao hang",
+    };
+    return map[field] || field;
+  }
+
+  async function startCheckoutFromAi(chatId, parsed = null) {
+    if (cartService.isCartEmpty(chatId)) {
+      await bot.sendMessage(chatId, "Giỏ hàng đang trống. Bạn chọn món trước rồi mình mới checkout được nhé.", getAiPostActionKeyboard());
+      return;
+    }
+
+    sessionService.resetSession(chatId);
+    const checkoutInfo = parsed && parsed.checkoutInfo && typeof parsed.checkoutInfo === "object" ? parsed.checkoutInfo : {};
+
+    const customerName = String(checkoutInfo.customerName || "").trim();
+    const rawPhone = String(checkoutInfo.phone || "").trim();
+    const normalizedPhone = rawPhone ? normalizePhoneNumber(rawPhone) : "";
+    const deliveryMethod = normalizeDeliveryMethod(checkoutInfo.deliveryMethod || "");
+    const address = String(checkoutInfo.address || "").trim();
+    const note = String(checkoutInfo.note || "").trim();
+
+    if (customerName) {
+      sessionService.mergeData(chatId, { customerName });
+    }
+
+    if (normalizedPhone && isValidVietnamPhone(normalizedPhone)) {
+      sessionService.mergeData(chatId, { phone: normalizedPhone });
+    }
+
+    if (deliveryMethod) {
+      sessionService.mergeData(chatId, { deliveryMethod });
+    }
+
+    if (deliveryMethod === "delivery" && address) {
+      sessionService.mergeData(chatId, { address });
+    }
+
+    if (note) {
+      sessionService.mergeData(chatId, { note });
+    }
+
+    const missingHints = Array.isArray(parsed && parsed.missingFields)
+      ? parsed.missingFields.map((field) => mapMissingFieldLabel(field))
+      : [];
+
+    if (!customerName) {
+      sessionService.setState(chatId, STATES.WAITING_NAME);
+      const hint = missingHints.length ? `\nCon thieu: ${missingHints.join(", ")}.` : "";
+      await bot.sendMessage(chatId, `Để giao hàng, bạn cho mình tên người nhận nhé.${hint}`);
+      return;
+    }
+
+    if (!normalizedPhone || !isValidVietnamPhone(normalizedPhone)) {
+      sessionService.setState(chatId, STATES.WAITING_PHONE);
+      const reason = rawPhone ? "Số điện thoại bạn nhập chưa hợp lệ." : "Mình chưa có số điện thoại của bạn.";
+      await bot.sendMessage(chatId, `${reason} Vui lòng nhập số điện thoại (VD: 0901234567).`);
+      return;
+    }
+
+    if (!deliveryMethod) {
+      sessionService.setState(chatId, STATES.WAITING_DELIVERY_METHOD);
+      await bot.sendMessage(chatId, "Bạn muốn nhận tại quán hay giao hàng?", getDeliveryMethodKeyboard());
+      return;
+    }
+
+    if (deliveryMethod === "delivery" && !address) {
+      sessionService.setState(chatId, STATES.WAITING_ADDRESS);
+      await bot.sendMessage(chatId, "Bạn gửi mình địa chỉ giao hàng nhé.");
+      return;
+    }
+
+    if (deliveryMethod === "pickup") {
+      sessionService.mergeData(chatId, { address: "" });
+    }
+
+    sessionService.setState(chatId, STATES.WAITING_NOTE);
+    await bot.sendMessage(
+      chatId,
+      "Mình đã nhận đủ thông tin cơ bản rồi. Bạn muốn thêm ghi chú gì không? (nhập - để bỏ qua)"
+    );
   }
 
   async function handleCheckoutStateMessage(chatId, text) {
