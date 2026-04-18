@@ -61,13 +61,24 @@ async function createPayOsPaymentLink(order) {
     }
   );
 
-  const data = response.data && response.data.data ? response.data.data : {};
+  const payload = response.data || {};
+  const data = payload && payload.data && typeof payload.data === "object" ? payload.data : payload;
+  const checkoutUrl = data.checkoutUrl || data.checkout_url || data.paymentUrl || data.payment_url || data.paymentLink || "";
+  const qrCode = data.qrCode || data.qr_code || data.qrCodeText || data.qrCodeData || "";
+  const paymentLinkId = data.paymentLinkId || data.payment_link_id || "";
+
+  if (!checkoutUrl && !qrCode) {
+    const failCode = payload.code || payload.error || "unknown";
+    const failDesc = payload.desc || payload.message || "PayOS khong tra checkoutUrl/qrCode";
+    throw new Error(`${failCode}: ${failDesc}`);
+  }
+
   return {
     provider: "payos",
-    paymentUrl: data.checkoutUrl,
-    checkoutUrl: data.checkoutUrl,
-    qrCode: data.qrCode,
-    paymentLinkId: data.paymentLinkId,
+    paymentUrl: checkoutUrl,
+    checkoutUrl,
+    qrCode,
+    paymentLinkId,
     status: "CREATED",
     expiredAt: paymentRequest.expiredAt,
   };

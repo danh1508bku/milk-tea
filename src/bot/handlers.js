@@ -164,6 +164,28 @@ function setupBotHandlers(bot, services) {
     console.log(`[${timestamp}] [${event}]`, data);
   }
 
+  function buildPaymentLinkMessage(orderCode, paymentLink) {
+    const lines = [`Link thanh toan cho don ${orderCode}:`];
+    const checkoutUrl = String(paymentLink && (paymentLink.paymentUrl || paymentLink.checkoutUrl) || "").trim();
+    const qrCode = String(paymentLink && paymentLink.qrCode || "").trim();
+
+    if (checkoutUrl) {
+      lines.push(checkoutUrl);
+    }
+
+    if (qrCode) {
+      lines.push("\nMa QR:");
+      lines.push(qrCode.length > 700 ? `${qrCode.slice(0, 700)}...` : qrCode);
+    }
+
+    if (!checkoutUrl && !qrCode) {
+      lines.push("PayOS khong tra ve link/QR hop le. Vui long thu lai sau it phut.");
+    }
+
+    lines.push("\nSau khi thanh toan xong, he thong se tu dong cap nhat trang thai don.");
+    return lines.join("\n");
+  }
+
   function logCommand(chatId, command, payload = "") {
     logEvent("COMMAND", { chatId, command, payload });
   }
@@ -1622,11 +1644,7 @@ function setupBotHandlers(bot, services) {
 
     await bot.sendMessage(
       chatId,
-      [
-        `Link thanh toan QR cho don ${orderCode}:`,
-        paymentLink.paymentUrl || paymentLink.checkoutUrl,
-        "Sau khi thanh toan xong, he thong se tu dong cap nhat trang thai don.",
-      ].join("\n")
+      buildPaymentLinkMessage(orderCode, paymentLink)
     );
   }));
 
@@ -1856,14 +1874,7 @@ function setupBotHandlers(bot, services) {
           await orderService.saveOrderPayment(orderCode, paymentLink);
 
           await bot.answerCallbackQuery(query.id, { text: "Da tao link thanh toan PayOS" });
-          await bot.sendMessage(
-            chatId,
-            [
-              `Link thanh toan cho don ${orderCode}:`,
-              paymentLink.paymentUrl || paymentLink.checkoutUrl,
-              "Sau khi thanh toan, he thong se tu dong cap nhat trang thai don.",
-            ].join("\n")
-          );
+          await bot.sendMessage(chatId, buildPaymentLinkMessage(orderCode, paymentLink));
           return;
         }
 
