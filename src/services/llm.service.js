@@ -96,6 +96,17 @@ function parseCustomerName(text) {
   return "";
 }
 
+function parseTargetIndex(text) {
+  const normalized = cleanUserText(text);
+  const match = normalized.match(/\b(?:so|mon so|muc|item)\s*(\d{1,3})\b/);
+  if (!match) {
+    return null;
+  }
+
+  const index = Number.parseInt(match[1], 10);
+  return Number.isInteger(index) && index > 0 ? index : null;
+}
+
 function scoreByTokenOverlap(userText, itemName) {
   const stopWords = new Set([
     "cho",
@@ -188,6 +199,26 @@ function parseFallback(message, menu) {
   if (/\b(menu|thuc don|danh sach mon|xem mon)\b/.test(normalized)) {
     return {
       intent: "show_menu",
+      items: [],
+      missingFields: [],
+    };
+  }
+
+  if (/\b(mo ta|mota|chi tiet mon|gioi thieu mon|thong tin mon)\b/.test(normalized)) {
+    return {
+      intent: "show_item_description",
+      targetIndex: parseTargetIndex(message),
+      targetItemName: "",
+      items: [],
+      missingFields: [],
+    };
+  }
+
+  if (/\b(gia mon|xem gia|bao gia|gia cua mon|gia so|bang gia)\b/.test(normalized)) {
+    return {
+      intent: "show_item_price",
+      targetIndex: parseTargetIndex(message),
+      targetItemName: "",
       items: [],
       missingFields: [],
     };
@@ -290,7 +321,7 @@ function parseFallback(message, menu) {
 
   for (const candidate of candidates) {
     const quantity = parseQuantity(candidate) || parseQuantity(message) || 1;
-    const size = parseSize(candidate) || parseSize(message) || "M";
+    const size = parseSize(candidate) || parseSize(message) || null;
     const bestItem = resolveBestMenuItem(candidate, menu);
     if (!bestItem) {
       continue;
@@ -347,8 +378,10 @@ async function parseWithOpenAi(message, menu) {
           [
             "Ban la parser dat mon cho quan tra sua.",
             "Tra ve DUY NHAT JSON hop le voi schema {intent, items, missingFields}.",
-            "intent hop le: add_to_cart | update_cart | checkout | show_menu | show_cart | clear_cart | help | switch_mode | unknown.",
+            "intent hop le: add_to_cart | update_cart | checkout | show_menu | show_cart | show_item_description | show_item_price | clear_cart | help | switch_mode | unknown.",
             "Voi intent checkout, tra ve them checkoutInfo: {customerName, phone, deliveryMethod, address, note} va missingFields cho cac truong con thieu.",
+            "Voi intent show_item_description, tra ve targetIndex hoac targetItemName de xac dinh mon can xem.",
+            "Voi intent show_item_price, tra ve targetIndex hoac targetItemName de xac dinh mon can xem gia.",
             "items la danh sach thao tac, moi phan tu co the co:",
             "- action: add | set_quantity | remove | add_toppings | remove_toppings | replace_toppings",
             "- itemId, itemName: mon can them",
@@ -383,6 +416,8 @@ async function parseWithOpenAi(message, menu) {
     intent: output.intent || "unknown",
     mode: output.mode || null,
     checkoutInfo: output.checkoutInfo && typeof output.checkoutInfo === "object" ? output.checkoutInfo : null,
+    targetIndex: output.targetIndex || null,
+    targetItemName: output.targetItemName || null,
     items: Array.isArray(output.items) ? output.items : [],
     missingFields: Array.isArray(output.missingFields) ? output.missingFields : [],
   };
@@ -397,6 +432,14 @@ async function parseOrderMessage(message, menu) {
   try {
     const aiResult = await parseWithOpenAi(message, menu);
     if (aiResult) {
+      const normalized = normalizeText(message);
+      const hasMultiItemHint = /\bva\b|\bvoi\b|,/.test(normalized);
+      if (hasMultiItemHint && aiResult.intent === "add_to_cart" && (!Array.isArray(aiResult.items) || aiResult.items.length <= 1)) {
+        const fallback = parseFallback(message, menu);
+        if (fallback.intent === "add_to_cart" && Array.isArray(fallback.items) && fallback.items.length > 1) {
+          return fallback;
+        }
+      }
       return aiResult;
     }
   } catch (error) {
@@ -407,8 +450,10 @@ async function parseOrderMessage(message, menu) {
 }
 
 const AI_OUTPUT_SCHEMA = {
-  intent: "add_to_cart | update_cart | checkout | show_menu | show_cart | clear_cart | help | switch_mode | unknown",
+  intent: "add_to_cart | update_cart | checkout | show_menu | show_cart | show_item_description | show_item_price | clear_cart | help | switch_mode | unknown",
   mode: "LIST | AI",
+  targetIndex: 1,
+  targetItemName: "string",
   checkoutInfo: {
     customerName: "string",
     phone: "string",
