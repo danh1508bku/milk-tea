@@ -77,6 +77,63 @@ async function startApp() {
     adminChatId,
   });
 
+  const buyerMainKeyboard = {
+    reply_markup: {
+      keyboard: [
+        ["Xem menu", "Xem giỏ hàng"],
+        ["Checkout", "/help"],
+        ["Chế độ LIST", "Chế độ AI"],
+      ],
+      resize_keyboard: true,
+    },
+  };
+
+  async function syncPaidAndNotify(externalOrderCode, sourceLabel) {
+    const targetCode = String(externalOrderCode || "").trim();
+    if (!targetCode) {
+      return null;
+    }
+
+    const orders = await orderService.listOrders();
+    const matched = orders.find((order) => {
+      const appOrderCode = String(order.orderCode || "").toUpperCase();
+      const payosOrderCode = String(order.payment && order.payment.providerOrderCode || "");
+      const targetUpper = targetCode.toUpperCase();
+      return appOrderCode === targetUpper || payosOrderCode === targetCode;
+    });
+
+    if (!matched) {
+      return null;
+    }
+
+    if (matched.paymentStatus === orderService.PAYMENT_STATUS.PAID) {
+      return matched;
+    }
+
+    const updated = await orderService.updateOrderPayment(matched.orderCode, orderService.PAYMENT_STATUS.PAID);
+    if (!updated) {
+      return null;
+    }
+
+    await bot.sendMessage(
+      updated.chatId,
+      [
+        `Thanh toan PayOS thanh cong cho don ${updated.orderCode}.`,
+        "Ban co the tiep tuc chon mon khac hoac xem gio hang.",
+      ].join("\n"),
+      buyerMainKeyboard
+    );
+
+    if (adminChatId && String(adminChatId) !== String(updated.chatId)) {
+      await bot.sendMessage(
+        adminChatId,
+        `Don ${updated.orderCode} da thanh toan thanh cong qua PayOS (${sourceLabel}).`
+      );
+    }
+
+    return updated;
+  }
+
   app.post("/webhooks/payos", async (req, res) => {
     const signature = req.headers["x-payos-signature"];
     const result = paymentService.handlePaymentWebhook(req.body, signature);
@@ -112,14 +169,21 @@ async function startApp() {
           );
         }
       }
+
+      if (result.status === "PAID") {
+        await syncPaidAndNotify(result.orderCode, "webhook");
+      }
     }
 
     res.json({ success: true });
   });
 
   app.get("/payment/success", (req, res) => {
-    const orderCode = String(req.query.orderCode || "").toUpperCase();
+    const orderCode = String(req.query.orderCode || "").trim();
     const orderLine = orderCode ? `<p>Ma don: <strong>${orderCode}</strong></p>` : "";
+
+    void syncPaidAndNotify(orderCode, "return-url");
+
     res.send(
       [
         "<h2>Thanh toan thanh cong</h2>",

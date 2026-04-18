@@ -119,6 +119,7 @@ async function createPayOsPaymentLink(order) {
 
   return {
     provider: "payos",
+    providerOrderCode: paymentRequest.orderCode,
     paymentUrl: checkoutUrl,
     checkoutUrl,
     qrCode,
