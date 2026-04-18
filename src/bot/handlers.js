@@ -915,6 +915,78 @@ function setupBotHandlers(bot, services) {
       .filter((part) => !["topping", "chon", "chọn", "xong"].includes(part));
   }
 
+  async function handlePendingAiCartUpdateInput(chatId, text) {
+    const session = sessionService.getSession(chatId);
+    const pending = session && session.data ? session.data.aiPendingCartUpdate : null;
+    if (!pending) {
+      return false;
+    }
+
+    const normalized = menuService.normalizeText(text || "");
+    if (["huy", "cancel", "bo qua", "dung"].includes(normalized)) {
+      sessionService.mergeData(chatId, { aiPendingCartUpdate: null });
+      await bot.sendMessage(chatId, "Mình đã hủy thao tác chỉnh giỏ.", getAiPostActionKeyboard());
+      return true;
+    }
+
+    const cart = cartService.getOrCreateCart(chatId);
+    const lineItem = cart.items[pending.lineNumber - 1];
+    if (!lineItem) {
+      sessionService.mergeData(chatId, { aiPendingCartUpdate: null });
+      await bot.sendMessage(chatId, "Món cần chỉnh không còn trong giỏ. Bạn thử lại giúp mình nhé.", getAiPostActionKeyboard());
+      return true;
+    }
+
+    const action = String(pending.action || "").toLowerCase();
+    if (!["add_toppings", "remove_toppings", "replace_toppings"].includes(action)) {
+      sessionService.mergeData(chatId, { aiPendingCartUpdate: null });
+      return false;
+    }
+
+    const toppingNames = parseToppingNamesFromText(text);
+    const requestedToppings = resolveToppingItems(toppingNames);
+    if (requestedToppings.length === 0) {
+      await bot.sendMessage(
+        chatId,
+        "Mình chưa nhận ra topping nào. Bạn thử nhập ví dụ: trân châu, pudding.",
+        getAiPostActionKeyboard()
+      );
+      return true;
+    }
+
+    const currentToppings = Array.isArray(lineItem.toppingDetails) ? [...lineItem.toppingDetails] : [];
+
+    if (action === "replace_toppings") {
+      lineItem.toppingDetails = requestedToppings.map((top) => ({
+        itemId: top.itemId,
+        name: top.name,
+        unitPrice: Number(top.priceM || 0),
+      }));
+    } else if (action === "add_toppings") {
+      const map = new Map(currentToppings.map((top) => [top.itemId, top]));
+      for (const top of requestedToppings) {
+        map.set(top.itemId, {
+          itemId: top.itemId,
+          name: top.name,
+          unitPrice: Number(top.priceM || 0),
+        });
+      }
+      lineItem.toppingDetails = Array.from(map.values());
+    } else {
+      const removeIds = new Set(requestedToppings.map((top) => top.itemId));
+      lineItem.toppingDetails = currentToppings.filter((top) => !removeIds.has(top.itemId));
+    }
+
+    recalcCartLinePrice(lineItem);
+    sessionService.mergeData(chatId, { aiPendingCartUpdate: null });
+    await bot.sendMessage(
+      chatId,
+      `Mình đã cập nhật topping cho ${lineItem.name} xong rồi nè.`,
+      getAiPostActionKeyboard()
+    );
+    return true;
+  }
+
   function pickMenuItemFromParsedTarget(parsed) {
     const rawIndex = Number.parseInt(parsed.targetIndex, 10);
     let item = Number.isInteger(rawIndex) && rawIndex > 0 ? menuService.getItemByIndex(rawIndex) : null;
@@ -1269,10 +1341,56 @@ function setupBotHandlers(bot, services) {
       return true;
     }
 
+    const mutableCart = cartService.getOrCreateCart(chatId);
+    if (parsed.intent === "update_cart" && parsed.items.length === 0) {
+      if (!mutableCart.items.length) {
+        await bot.sendMessage(chatId, "Giỏ hàng đang trống nên chưa có gì để chỉnh. Bạn thêm món trước nhé.", getAiPostActionKeyboard());
+        return true;
+      }
+
+      const normalizedText = menuService.normalizeText(text || "");
+      const looksLikeToppingUpdate = /topping|tran chau|thach|pudding|kem cheese/.test(normalizedText);
+      if (looksLikeToppingUpdate) {
+        if (mutableCart.items.length === 1) {
+          const onlyItem = mutableCart.items[0];
+          sessionService.mergeData(chatId, {
+            aiPendingCartUpdate: {
+              action: "add_toppings",
+              lineNumber: 1,
+            },
+          });
+          await bot.sendMessage(
+            chatId,
+            `Bạn muốn thêm topping gì cho ${onlyItem.name}? Ví dụ: trân châu, pudding.`,
+            getAiPostActionKeyboard()
+          );
+          return true;
+        }
+
+        const lines = mutableCart.items.map((item, index) => `- ${index + 1}. ${item.name} size ${item.size || "M"}`).join("\n");
+        await bot.sendMessage(
+          chatId,
+          [
+            "Bạn muốn thêm topping cho món nào trong giỏ?",
+            lines,
+            "Ví dụ: thêm topping trân châu cho món số 1.",
+          ].join("\n"),
+          getAiPostActionKeyboard()
+        );
+        return true;
+      }
+
+      await bot.sendMessage(
+        chatId,
+        "Mình cần thêm thông tin để chỉnh giỏ. Bạn nói rõ giúp mình: đổi gì, cho món nào nhé.",
+        getAiPostActionKeyboard()
+      );
+      return true;
+    }
+
     const ops = parsed.items.length > 0 ? parsed.items : [{}];
     const successes = [];
     const failures = [];
-    const mutableCart = cartService.getOrCreateCart(chatId);
     let pendingSizeRequest = null;
 
     for (const op of ops) {
@@ -1358,7 +1476,10 @@ function setupBotHandlers(bot, services) {
         continue;
       }
 
-      const lineNumber = resolveCartLineByTarget(mutableCart, op);
+      let lineNumber = resolveCartLineByTarget(mutableCart, op);
+      if (!lineNumber && ["add_toppings", "remove_toppings", "replace_toppings"].includes(action) && mutableCart.items.length === 1) {
+        lineNumber = 1;
+      }
       if (!lineNumber) {
         failures.push(`Khong tim thay mon can sua '${op.targetItemName || op.itemName || op.itemId || ""}'.`);
         continue;
@@ -1402,6 +1523,20 @@ function setupBotHandlers(bot, services) {
 
       if (["add_toppings", "remove_toppings", "replace_toppings"].includes(action)) {
         const requestedToppings = resolveToppingItems(op.toppings);
+        if (requestedToppings.length === 0) {
+          sessionService.mergeData(chatId, {
+            aiPendingCartUpdate: {
+              action,
+              lineNumber,
+            },
+          });
+          await bot.sendMessage(
+            chatId,
+            `Bạn muốn ${action === "remove_toppings" ? "bỏ" : "thêm"} topping nào cho ${lineItem.name}?`,
+            getAiPostActionKeyboard()
+          );
+          return true;
+        }
         const currentToppings = Array.isArray(lineItem.toppingDetails) ? [...lineItem.toppingDetails] : [];
 
         if (action === "replace_toppings") {
@@ -2918,6 +3053,11 @@ function setupBotHandlers(bot, services) {
     }
 
     if (getChatMode(chatId) === MODES.AI) {
+      const consumedPendingCartUpdate = await handlePendingAiCartUpdateInput(chatId, text);
+      if (consumedPendingCartUpdate) {
+        return;
+      }
+
       const consumedPending = await handlePendingAiAddInput(chatId, text);
       if (consumedPending) {
         return;
