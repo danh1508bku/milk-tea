@@ -12,7 +12,6 @@ const STATES = {
 };
 
 const MODES = {
-  LIST: "LIST",
   AI: "AI",
 };
 
@@ -31,7 +30,7 @@ function getSessionTtlSeconds() {
 function getDefaultSession() {
   return {
     state: STATES.IDLE,
-    mode: MODES.LIST,
+    mode: MODES.AI,
     data: {},
     updatedAt: new Date().toISOString(),
   };
@@ -158,17 +157,17 @@ function resetSession(chatId) {
 
 function getMode(chatId) {
   const session = sessions.get(chatId) || getDefaultSession();
-  return session.mode || MODES.LIST;
+  return session.mode || MODES.AI;
 }
 
 function setMode(chatId, mode) {
   const current = sessions.get(chatId) || getDefaultSession();
   const upperMode = String(mode || "").toUpperCase();
 
-  if (!Object.values(MODES).includes(upperMode)) {
+  if (upperMode !== MODES.AI) {
     return {
       ok: false,
-      error: "Mode khong hop le. Chi nhan LIST hoac AI.",
+      error: "Bot chi ho tro che do AI.",
     };
   }
 

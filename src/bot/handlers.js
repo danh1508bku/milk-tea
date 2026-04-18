@@ -16,7 +16,6 @@ function getMainKeyboard() {
       keyboard: [
         ["Xem menu", "Xem giỏ hàng"],
         ["Checkout", "/help"],
-        ["Chế độ LIST", "Chế độ AI"],
       ],
       resize_keyboard: true,
     },
@@ -204,19 +203,6 @@ function parseMenuEditArgs(raw) {
   }
 
   return { ok: true, itemId, updates };
-}
-
-function getModeInlineKeyboard() {
-  return {
-    reply_markup: {
-      inline_keyboard: [
-        [
-          { text: "Chế độ LIST", callback_data: "lf:mode:LIST" },
-          { text: "Chế độ AI", callback_data: "lf:mode:AI" },
-        ],
-      ],
-    },
-  };
 }
 
 function buildPaymentMethodInlineKeyboard(orderCode) {
@@ -488,156 +474,10 @@ function setupBotHandlers(bot, services) {
     };
   }
 
-  function getAvailableDrinkItems() {
-    return menuService
-      .getMenu()
-      .filter((item) => item.available && item.category !== "Topping");
-  }
-
   function getAvailableToppings() {
     return menuService
       .getMenu()
       .filter((item) => item.available && item.category === "Topping");
-  }
-
-  function shortButtonLabel(item) {
-    const maxLen = 20;
-    const name = String(item.name || "");
-    const shortName = name.length > maxLen ? `${name.slice(0, maxLen - 1)}…` : name;
-    return `${item.itemId} | ${shortName}`;
-  }
-
-  function buildListMenuKeyboard() {
-    const items = getAvailableDrinkItems();
-    const rows = [];
-
-    for (let i = 0; i < items.length; i += 2) {
-      const left = items[i];
-      const right = items[i + 1];
-      const row = [{ text: shortButtonLabel(left), callback_data: `lf:item:${left.itemId}` }];
-      if (right) {
-        row.push({ text: shortButtonLabel(right), callback_data: `lf:item:${right.itemId}` });
-      }
-      rows.push(row);
-    }
-
-    rows.push([{ text: "Xem giỏ hàng", callback_data: "lf:cart" }]);
-    rows.push([{ text: "Chọn mode", callback_data: "lf:modepicker" }]);
-
-    return {
-      reply_markup: {
-        inline_keyboard: rows,
-      },
-    };
-  }
-
-  function buildItemActionKeyboard(itemId) {
-    return {
-      reply_markup: {
-        inline_keyboard: [
-          [
-            { text: "Xem mô tả", callback_data: `lf:desc:${itemId}` },
-            { text: "Xem giá", callback_data: `lf:price:${itemId}` },
-          ],
-          [
-            { text: "Chọn size M", callback_data: `lf:size:${itemId}:M` },
-            { text: "Chọn size L", callback_data: `lf:size:${itemId}:L` },
-          ],
-          [{ text: "⬅ Danh sách sản phẩm", callback_data: "lf:list" }],
-        ],
-      },
-    };
-  }
-
-  function buildQuantityKeyboard(itemId, size) {
-    return {
-      reply_markup: {
-        inline_keyboard: [
-          [
-            { text: "1", callback_data: `lf:qty:${itemId}:${size}:1` },
-            { text: "2", callback_data: `lf:qty:${itemId}:${size}:2` },
-            { text: "3", callback_data: `lf:qty:${itemId}:${size}:3` },
-            { text: "Số khác", callback_data: `lf:qtycustom:${itemId}:${size}` },
-          ],
-          [{ text: "⬅ Chọn lại sản phẩm", callback_data: `lf:item:${itemId}` }],
-        ],
-      },
-    };
-  }
-
-  function buildToppingKeyboard(selectedCodes = []) {
-    const toppings = getAvailableToppings();
-    const rows = [];
-
-    for (let i = 0; i < toppings.length; i += 2) {
-      const row = [];
-      const left = toppings[i];
-      const right = toppings[i + 1];
-      const leftSelected = selectedCodes.includes(left.itemId) ? "✅ " : "";
-      row.push({
-        text: `${leftSelected}${left.name} (+${formatCurrencyVND(left.priceM)})`,
-        callback_data: `lf:top:${left.itemId}`,
-      });
-
-      if (right) {
-        const rightSelected = selectedCodes.includes(right.itemId) ? "✅ " : "";
-        row.push({
-          text: `${rightSelected}${right.name} (+${formatCurrencyVND(right.priceM)})`,
-          callback_data: `lf:top:${right.itemId}`,
-        });
-      }
-
-      rows.push(row);
-    }
-
-    rows.push([
-      { text: "Bỏ qua topping", callback_data: "lf:topskip" },
-      { text: "Xong topping", callback_data: "lf:topdone" },
-    ]);
-    rows.push([{ text: "⬅ Chọn lại số lượng", callback_data: "lf:qtyback" }]);
-
-    return {
-      reply_markup: {
-        inline_keyboard: rows,
-      },
-    };
-  }
-
-  function buildPostAddKeyboard() {
-    return {
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "Chọn món khác", callback_data: "lf:list" }],
-          [
-            { text: "Xem giỏ hàng", callback_data: "lf:cart" },
-            { text: "Checkout", callback_data: "lf:checkout" },
-          ],
-        ],
-      },
-    };
-  }
-
-  function getListFlow(chatId) {
-    const session = sessionService.getSession(chatId);
-    return session.data && session.data.listFlow ? session.data.listFlow : null;
-  }
-
-  function saveListFlow(chatId, flowData) {
-    const current = getListFlow(chatId) || {};
-    sessionService.mergeData(chatId, {
-      listFlow: {
-        ...current,
-        ...flowData,
-      },
-    });
-  }
-
-  function clearListFlow(chatId) {
-    sessionService.mergeData(chatId, { listFlow: null });
-  }
-
-  async function sendModePicker(chatId, title = "Chọn mode hoạt động:") {
-    await bot.sendMessage(chatId, title, getModeInlineKeyboard());
   }
 
   async function sendAdminHelp(chatId) {
@@ -837,145 +677,7 @@ function setupBotHandlers(bot, services) {
     await bot.sendMessage(chatId, ["MENU HIEN TAI:", ...lines].join("\n"), getAdminKeyboard());
   }
 
-  async function sendListMenu(chatId) {
-    clearListFlow(chatId);
-    await bot.sendMessage(
-      chatId,
-      "LIST MODE: Chọn sản phẩm bằng nút bên dưới. Sau đó bot sẽ dẫn bạn chọn size, số lượng và topping.",
-      buildListMenuKeyboard()
-    );
-  }
-
-  async function sendItemActions(chatId, itemId) {
-    const item = menuService.getItemByCode(itemId);
-    if (!item || item.category === "Topping") {
-      await bot.sendMessage(chatId, "Sản phẩm không hợp lệ, vui lòng chọn lại từ danh sách.", buildListMenuKeyboard());
-      return;
-    }
-
-    saveListFlow(chatId, {
-      itemId: item.itemId,
-      size: null,
-      quantity: null,
-      selectedToppings: [],
-    });
-
-    await bot.sendMessage(
-      chatId,
-      [
-        `Bạn chọn: ${item.name}`,
-        "Bấm Xem mô tả / Xem giá hoặc chọn size trực tiếp.",
-      ].join("\n"),
-      buildItemActionKeyboard(item.itemId)
-    );
-  }
-
-  async function sendToppingSelection(chatId, messageId) {
-    const flow = getListFlow(chatId);
-    if (!flow || !flow.itemId || !flow.size || !flow.quantity) {
-      await bot.sendMessage(chatId, "Thiếu thông tin chọn món. Vui lòng bắt đầu lại từ danh sách.", buildListMenuKeyboard());
-      return;
-    }
-
-    const item = menuService.getItemByCode(flow.itemId);
-    if (!item) {
-      await bot.sendMessage(chatId, "Không tìm thấy món đã chọn. Vui lòng chọn lại.", buildListMenuKeyboard());
-      return;
-    }
-
-    const chosenToppings = (flow.selectedToppings || [])
-      .map((code) => menuService.getItemByCode(code))
-      .filter(Boolean)
-      .map((top) => top.name);
-
-    const toppingLine = chosenToppings.length > 0 ? chosenToppings.join(", ") : "Chưa chọn";
-    const text = [
-      `Món: ${item.name}`,
-      `Size: ${flow.size}`,
-      `Số lượng: ${flow.quantity}`,
-      `Topping đã chọn: ${toppingLine}`,
-      "Bấm topping để bật/tắt, rồi chọn Xong topping.",
-    ].join("\n");
-
-    const keyboard = buildToppingKeyboard(flow.selectedToppings || []);
-
-    if (messageId) {
-      try {
-        await bot.editMessageText(text, {
-          chat_id: chatId,
-          message_id: messageId,
-          reply_markup: keyboard.reply_markup,
-        });
-        return;
-      } catch (error) {
-        logEvent("EDIT_TOPPING_MESSAGE_FAILED", { chatId, reason: error.message });
-      }
-    }
-
-    await bot.sendMessage(chatId, text, keyboard);
-  }
-
-  async function finalizeListSelection(chatId, skipTopping = false) {
-    const flow = getListFlow(chatId);
-    if (!flow || !flow.itemId || !flow.size || !flow.quantity) {
-      await bot.sendMessage(chatId, "Thiếu dữ liệu món đã chọn. Vui lòng chọn lại từ danh sách.", buildListMenuKeyboard());
-      return;
-    }
-
-    const menuItem = menuService.getItemByCode(flow.itemId);
-    if (!menuItem) {
-      await bot.sendMessage(chatId, "Món không còn trong menu. Vui lòng chọn món khác.", buildListMenuKeyboard());
-      return;
-    }
-
-    const size = String(flow.size).toUpperCase() === "L" ? "L" : "M";
-    const quantity = Number.parseInt(flow.quantity, 10);
-    const chosenCodes = skipTopping ? [] : Array.from(new Set(flow.selectedToppings || []));
-    const chosenToppings = chosenCodes
-      .map((code) => menuService.getItemByCode(code))
-      .filter((item) => item && item.category === "Topping");
-
-    const baseUnitPrice = size === "L" ? menuItem.priceL : menuItem.priceM;
-    const toppingUnitPrice = chosenToppings.reduce((sum, top) => sum + Number(top.priceM || 0), 0);
-    const unitPrice = baseUnitPrice + toppingUnitPrice;
-
-    cartService.addItem(chatId, {
-      itemId: menuItem.itemId,
-      name: menuItem.name,
-      category: menuItem.category,
-      size,
-      quantity,
-      unitPrice,
-      baseUnitPrice,
-      toppingDetails: chosenToppings.map((top) => ({
-        itemId: top.itemId,
-        name: top.name,
-        unitPrice: Number(top.priceM || 0),
-      })),
-      toppings: chosenToppings.map((top) => top.name),
-      note: "",
-    });
-
-    clearListFlow(chatId);
-
-    const toppingText = chosenToppings.length > 0 ? chosenToppings.map((top) => top.name).join(", ") : "Không";
-    await bot.sendMessage(
-      chatId,
-      [
-        `Đã thêm ${quantity} ${menuItem.name} size ${size} vào giỏ.`,
-        `Topping: ${toppingText}`,
-        `Đơn giá tính tiền: ${formatCurrencyVND(unitPrice)}`,
-      ].join("\n"),
-      buildPostAddKeyboard()
-    );
-  }
-
   async function sendMenu(chatId) {
-    if (getChatMode(chatId) === MODES.LIST) {
-      await sendListMenu(chatId);
-      return;
-    }
-
     const grouped = menuService.getMenuByCategories();
     const categoryOrder = [
       "Trà Sữa",
@@ -1558,20 +1260,7 @@ function setupBotHandlers(bot, services) {
     }
 
     if (parsed.intent === "switch_mode") {
-      const nextMode = String(parsed.mode || "").toUpperCase() === "LIST" ? MODES.LIST : MODES.AI;
-      const result = sessionService.setMode(chatId, nextMode);
-      if (!result.ok) {
-        await bot.sendMessage(chatId, result.error, getAiPostActionKeyboard());
-        return true;
-      }
-
-      if (result.mode === MODES.LIST) {
-        await bot.sendMessage(chatId, "Mình đã chuyển sang chế độ LIST.");
-        await sendListMenu(chatId);
-        return true;
-      }
-
-      await bot.sendMessage(chatId, "Mình đã chuyển sang chế độ AI. Bạn cứ chat tự nhiên nhé.", getAiPostActionKeyboard());
+      await bot.sendMessage(chatId, "Bot đang ở AI mode rồi. Bạn cứ chat tự nhiên để đặt món nhé.", getAiPostActionKeyboard());
       return true;
     }
 
@@ -2029,7 +1718,6 @@ function setupBotHandlers(bot, services) {
   bot.onText(/^\/start$/i, safe(async (msg) => {
     logCommand(msg.chat.id, "/start");
     const isAdmin = isAdminChat(msg.chat.id);
-    const mode = getChatMode(msg.chat.id);
 
     if (isAdmin) {
       await sendAdminDashboard(
@@ -2043,19 +1731,19 @@ function setupBotHandlers(bot, services) {
       return;
     }
 
+    sessionService.setMode(msg.chat.id, MODES.AI);
+
     await bot.sendMessage(
       msg.chat.id,
       [
         "Chao ban, minh la bot dat tra sua.",
-        `Che do hien tai: ${mode}`,
-        "- LIST: chi dat theo menu co san",
-        "- AI: nhap ngon ngu tu nhien de bot parse",
-        "Bam nut Chon mode ben duoi hoac dung /mode list, /mode ai.",
+        "Bot hien dang o AI mode.",
+        "Ban muon dung mon gi hom nay? Minh se goi y menu de ban chon nhanh.",
       ].join("\n"),
       getKeyboardByRole(msg.chat.id)
     );
 
-    await sendModePicker(msg.chat.id);
+    await sendMenu(msg.chat.id);
   }));
 
   bot.onText(/^\/help$/i, safe(async (msg) => {
@@ -2065,7 +1753,6 @@ function setupBotHandlers(bot, services) {
       return;
     }
 
-    const mode = getChatMode(msg.chat.id);
     await bot.sendMessage(
       msg.chat.id,
       [
@@ -2083,11 +1770,9 @@ function setupBotHandlers(bot, services) {
         "/qr <orderCode> - Nhan link thanh toan QR PayOS",
         "/cancel - Huy checkout hien tai",
         "/ai <noi_dung> - Thu parser AI dat mon",
-        "/mode - Xem che do hien tai",
-        "/mode list - Ve che do dat theo danh sach",
-        "/mode ai - Bat che do dat bang ngon ngu tu nhien",
+        "/mode - Xem thong tin che do",
         "",
-        `Che do hien tai: ${mode}`,
+        "Che do hien tai: AI-only",
         "Vi du: /add TS03 L 2",
         'Vi du: /add "Tra Sua Truyen Thong" L 2',
       ].join("\n"),
@@ -2104,46 +1789,15 @@ function setupBotHandlers(bot, services) {
       return;
     }
 
-    if (!inputMode) {
-      const currentMode = getChatMode(chatId);
-      await sendModePicker(
-        chatId,
-        [
-          `Che do hien tai: ${currentMode}`,
-          "Dung /mode list de dat theo menu co san.",
-          "Dung /mode ai de dat bang ngon ngu tu nhien.",
-        ].join("\n")
-      );
-      return;
-    }
-
-    const nextMode = inputMode === "AI" ? MODES.AI : MODES.LIST;
-    const result = sessionService.setMode(chatId, nextMode);
-    if (!result.ok) {
-      await bot.sendMessage(chatId, result.error);
-      return;
-    }
-
-    if (result.mode === MODES.AI) {
-      await bot.sendMessage(
-        chatId,
-        [
-          "Da chuyen sang che do AI.",
-          "Ban co the nhap tu nhien, vi du: cho minh 2 tra sua truyen thong size L",
-        ].join("\n")
-      );
-      return;
-    }
-
+    sessionService.setMode(chatId, MODES.AI);
     await bot.sendMessage(
       chatId,
       [
-        "Da chuyen sang che do LIST.",
-        "Ban dat hang bang nut bam, khong can go /add.",
-      ].join("\n")
+        "Bot chi ho tro AI mode.",
+        "Ban cu nhap tu nhien de dat mon, xem gio, checkout.",
+      ].join("\n"),
+      getKeyboardByRole(chatId)
     );
-
-    await sendListMenu(chatId);
   }));
 
   bot.onText(/^\/menu$/i, safe(async (msg) => {
@@ -3079,212 +2733,20 @@ function setupBotHandlers(bot, services) {
       const parts = data.split(":");
       const action = parts[1] || "";
 
-      if (action === "modepicker") {
-        await bot.answerCallbackQuery(query.id);
-        await sendModePicker(chatId);
-        return;
-      }
-
-      if (action === "mode") {
-        const nextMode = String(parts[2] || "").toUpperCase();
-        const result = sessionService.setMode(chatId, nextMode);
-
-        if (!result.ok) {
-          await bot.answerCallbackQuery(query.id, { text: result.error, show_alert: true });
+      if (data.startsWith("lf:")) {
+        if (action === "cart") {
+          await bot.answerCallbackQuery(query.id);
+          await sendCart(chatId);
           return;
         }
 
-        await bot.answerCallbackQuery(query.id, { text: `Da chuyen sang ${result.mode}` });
-
-        if (result.mode === MODES.LIST) {
-          await sendListMenu(chatId);
+        if (action === "checkout") {
+          await bot.answerCallbackQuery(query.id);
+          await startCheckout(chatId);
           return;
         }
 
-        await bot.sendMessage(chatId, "Da chuyen sang che do AI. Ban co the nhap tu nhien de bot parse.", getMainKeyboard());
-        return;
-      }
-
-      if (getChatMode(chatId) !== MODES.LIST) {
-        await bot.answerCallbackQuery(query.id, { text: "Vui long chuyen sang LIST mode de dung cac nut nay." });
-        return;
-      }
-
-      if (action === "list") {
-        await bot.answerCallbackQuery(query.id);
-        await sendListMenu(chatId);
-        return;
-      }
-
-      if (action === "cart") {
-        await bot.answerCallbackQuery(query.id);
-        await sendCart(chatId);
-        return;
-      }
-
-      if (action === "checkout") {
-        await bot.answerCallbackQuery(query.id);
-        await startCheckout(chatId);
-        return;
-      }
-
-      if (action === "item") {
-        const itemId = parts[2];
-        await bot.answerCallbackQuery(query.id);
-        await sendItemActions(chatId, itemId);
-        return;
-      }
-
-      if (action === "desc") {
-        const itemId = parts[2];
-        const item = menuService.getItemByCode(itemId);
-        await bot.answerCallbackQuery(query.id, {
-          text: item ? item.description : "Khong tim thay mo ta.",
-          show_alert: true,
-        });
-        return;
-      }
-
-      if (action === "price") {
-        const itemId = parts[2];
-        const item = menuService.getItemByCode(itemId);
-        await bot.answerCallbackQuery(query.id, {
-          text: item
-            ? `Gia ${item.name}\nM: ${formatCurrencyVND(item.priceM)}\nL: ${formatCurrencyVND(item.priceL)}`
-            : "Khong tim thay gia.",
-          show_alert: true,
-        });
-        return;
-      }
-
-      if (action === "size") {
-        const itemId = parts[2];
-        const size = String(parts[3] || "M").toUpperCase() === "L" ? "L" : "M";
-        const item = menuService.getItemByCode(itemId);
-
-        if (!item) {
-          await bot.answerCallbackQuery(query.id, { text: "Mon khong hop le.", show_alert: true });
-          return;
-        }
-
-        saveListFlow(chatId, {
-          itemId: item.itemId,
-          size,
-          quantity: null,
-          selectedToppings: [],
-        });
-
-        await bot.answerCallbackQuery(query.id, { text: `Da chon size ${size}` });
-        await bot.sendMessage(
-          chatId,
-          `Da chon ${item.name} size ${size}. Bam so luong mong muon:`,
-          buildQuantityKeyboard(item.itemId, size)
-        );
-        return;
-      }
-
-      if (action === "qty") {
-        const itemId = parts[2];
-        const size = String(parts[3] || "M").toUpperCase() === "L" ? "L" : "M";
-        const quantity = Number.parseInt(parts[4], 10);
-        if (!Number.isInteger(quantity) || quantity <= 0) {
-          await bot.answerCallbackQuery(query.id, { text: "So luong khong hop le.", show_alert: true });
-          return;
-        }
-
-        saveListFlow(chatId, {
-          itemId,
-          size,
-          quantity,
-          selectedToppings: [],
-        });
-
-        await bot.answerCallbackQuery(query.id, { text: `Da chon so luong ${quantity}` });
-        await sendToppingSelection(chatId);
-        return;
-      }
-
-      if (action === "qtycustom") {
-        const itemId = parts[2];
-        const size = String(parts[3] || "M").toUpperCase() === "L" ? "L" : "M";
-        const item = menuService.getItemByCode(itemId);
-
-        if (!item) {
-          await bot.answerCallbackQuery(query.id, { text: "Mon khong hop le.", show_alert: true });
-          return;
-        }
-
-        saveListFlow(chatId, {
-          itemId,
-          size,
-          quantity: null,
-          selectedToppings: [],
-          waitingCustomQuantity: true,
-        });
-
-        await bot.answerCallbackQuery(query.id);
-        await bot.sendMessage(
-          chatId,
-          `Bạn đã chọn ${item.name} size ${size}.\nVui lòng nhập số lượng mong muốn (số nguyên > 0).`
-        );
-        return;
-      }
-
-      if (action === "qtyback") {
-        const flow = getListFlow(chatId);
-        if (!flow || !flow.itemId || !flow.size) {
-          await bot.answerCallbackQuery(query.id, { text: "Khong tim thay buoc truoc." });
-          await sendListMenu(chatId);
-          return;
-        }
-
-        await bot.answerCallbackQuery(query.id);
-        await bot.sendMessage(
-          chatId,
-          `Ban dang chon ${flow.itemId} size ${flow.size}. Bam lai so luong:`,
-          buildQuantityKeyboard(flow.itemId, flow.size)
-        );
-        return;
-      }
-
-      if (action === "top") {
-        const toppingId = parts[2];
-        const flow = getListFlow(chatId);
-
-        if (!flow || !flow.itemId || !flow.size || !flow.quantity) {
-          await bot.answerCallbackQuery(query.id, { text: "Ban chua chon du thong tin mon." });
-          await sendListMenu(chatId);
-          return;
-        }
-
-        const exists = menuService.getItemByCode(toppingId);
-        if (!exists || exists.category !== "Topping") {
-          await bot.answerCallbackQuery(query.id, { text: "Topping khong hop le." });
-          return;
-        }
-
-        const selected = new Set(flow.selectedToppings || []);
-        if (selected.has(toppingId)) {
-          selected.delete(toppingId);
-        } else {
-          selected.add(toppingId);
-        }
-
-        saveListFlow(chatId, { selectedToppings: Array.from(selected) });
-        await bot.answerCallbackQuery(query.id);
-        await sendToppingSelection(chatId, query.message.message_id);
-        return;
-      }
-
-      if (action === "topskip") {
-        await bot.answerCallbackQuery(query.id, { text: "Bo qua topping" });
-        await finalizeListSelection(chatId, true);
-        return;
-      }
-
-      if (action === "topdone") {
-        await bot.answerCallbackQuery(query.id, { text: "Da chot topping, dang them vao gio" });
-        await finalizeListSelection(chatId, false);
+        await bot.answerCallbackQuery(query.id, { text: "LIST mode đã tắt. Bạn nhập tự nhiên để đặt món AI nhé." });
         return;
       }
 
@@ -3351,7 +2813,7 @@ function setupBotHandlers(bot, services) {
       }
     }
 
-    if (isAdminChat(chatId) && ["Xem menu", "Xem giỏ hàng", "Checkout", "Chế độ LIST", "Chế độ AI"].includes(text)) {
+    if (isAdminChat(chatId) && ["Xem menu", "Xem giỏ hàng", "Checkout", "Chế độ AI"].includes(text)) {
       await denyBuyerFlowForAdmin(chatId);
       return;
     }
@@ -3411,29 +2873,8 @@ function setupBotHandlers(bot, services) {
       return;
     }
 
-    if (text === "Chế độ LIST") {
-      const result = sessionService.setMode(chatId, MODES.LIST);
-      if (!result.ok) {
-        await bot.sendMessage(chatId, result.error, getMainKeyboard());
-        return;
-      }
-
-      await bot.sendMessage(
-        chatId,
-        "Đã chuyển sang chế độ LIST. Mình sẽ dẫn bạn chọn món theo từng bước bằng nút bấm.",
-        getKeyboardByRole(chatId)
-      );
-      await sendListMenu(chatId);
-      return;
-    }
-
     if (text === "Chế độ AI") {
-      const result = sessionService.setMode(chatId, MODES.AI);
-      if (!result.ok) {
-        await bot.sendMessage(chatId, result.error, getMainKeyboard());
-        return;
-      }
-
+      sessionService.setMode(chatId, MODES.AI);
       await bot.sendMessage(
         chatId,
         "Đã chuyển sang chế độ AI. Bạn có thể nhập tự nhiên để bot parse.",
@@ -3444,27 +2885,12 @@ function setupBotHandlers(bot, services) {
 
     const normalizedInput = menuService.normalizeText(text);
     if (["ve list", "qua list", "che do list", "mode list", "dat bang nut", "nut bam"].includes(normalizedInput)) {
-      const result = sessionService.setMode(chatId, MODES.LIST);
-      if (!result.ok) {
-        await bot.sendMessage(chatId, result.error, getMainKeyboard());
-        return;
-      }
-
-      await bot.sendMessage(
-        chatId,
-        "Đã chuyển sang chế độ LIST. Mình sẽ dẫn bạn chọn món theo từng bước bằng nút bấm.",
-        getKeyboardByRole(chatId)
-      );
-      await sendListMenu(chatId);
+      await bot.sendMessage(chatId, "Bot chỉ hỗ trợ AI mode. Bạn cứ nhắn tự nhiên để mình xử lý nhé.", getKeyboardByRole(chatId));
       return;
     }
 
     if (["ve ai", "qua ai", "che do ai", "mode ai", "chat tu nhien", "nhap tu nhien"].includes(normalizedInput)) {
-      const result = sessionService.setMode(chatId, MODES.AI);
-      if (!result.ok) {
-        await bot.sendMessage(chatId, result.error, getMainKeyboard());
-        return;
-      }
+      sessionService.setMode(chatId, MODES.AI);
 
       await bot.sendMessage(
         chatId,
@@ -3487,6 +2913,10 @@ function setupBotHandlers(bot, services) {
       return;
     }
 
+    if (getChatMode(chatId) !== MODES.AI) {
+      sessionService.setMode(chatId, MODES.AI);
+    }
+
     if (getChatMode(chatId) === MODES.AI) {
       const consumedPending = await handlePendingAiAddInput(chatId, text);
       if (consumedPending) {
@@ -3494,36 +2924,9 @@ function setupBotHandlers(bot, services) {
       }
     }
 
-    const listFlow = getListFlow(chatId);
-    if (getChatMode(chatId) === MODES.LIST && listFlow && listFlow.waitingCustomQuantity) {
-      const quantity = Number.parseInt(text, 10);
-      if (!Number.isInteger(quantity) || quantity <= 0) {
-        await bot.sendMessage(chatId, "Số lượng không hợp lệ. Vui lòng nhập số nguyên lớn hơn 0.");
-        return;
-      }
-
-      saveListFlow(chatId, {
-        quantity,
-        waitingCustomQuantity: false,
-      });
-
-      await bot.sendMessage(chatId, `Đã nhận số lượng ${quantity}. Tiếp theo mời bạn chọn topping:`);
-      await sendToppingSelection(chatId);
-      return;
-    }
-
     const state = sessionService.getSession(chatId).state;
     if (state !== STATES.IDLE) {
       await handleCheckoutStateMessage(chatId, text);
-      return;
-    }
-
-    if (getChatMode(chatId) !== MODES.AI) {
-      await bot.sendMessage(
-        chatId,
-        "Ban dang o che do LIST. Dung /menu de xem mon, hoac /mode ai neu muon nhap ngon ngu tu nhien.",
-        getKeyboardByRole(chatId)
-      );
       return;
     }
 
