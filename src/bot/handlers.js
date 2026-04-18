@@ -1870,8 +1870,15 @@ function setupBotHandlers(bot, services) {
           }
 
           await orderService.setPaymentMethod(orderCode, choice.paymentMethod);
-          const paymentLink = await paymentService.createPaymentLink(order);
-          await orderService.saveOrderPayment(orderCode, paymentLink);
+          let paymentLink;
+          try {
+            paymentLink = await paymentService.createPaymentLink(order);
+            await orderService.saveOrderPayment(orderCode, paymentLink);
+          } catch (error) {
+            await bot.answerCallbackQuery(query.id, { text: "Khong tao duoc thanh toan", show_alert: true });
+            await bot.sendMessage(chatId, `Khong tao duoc thanh toan PayOS: ${error.message}`);
+            return;
+          }
 
           await bot.answerCallbackQuery(query.id, { text: "Da tao link thanh toan PayOS" });
           await bot.sendMessage(chatId, buildPaymentLinkMessage(orderCode, paymentLink));
