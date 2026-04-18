@@ -46,6 +46,59 @@ function removeItemByLine(chatId, lineNumber) {
 	return { ok: true, removed, cart };
 }
 
+function updateItemQuantityByLine(chatId, lineNumber, quantity) {
+	const cart = carts.get(chatId);
+	if (!cart || cart.items.length === 0) {
+		return { ok: false, error: "Giỏ hàng đang trống." };
+	}
+
+	if (!Number.isInteger(lineNumber) || lineNumber <= 0 || lineNumber > cart.items.length) {
+		return { ok: false, error: "Số dòng không hợp lệ. Dùng /cart để xem lại số thứ tự." };
+	}
+
+	if (!Number.isInteger(quantity) || quantity < 0) {
+		return { ok: false, error: "Số lượng phải là số nguyên >= 0." };
+	}
+
+	if (quantity === 0) {
+		const [removed] = cart.items.splice(lineNumber - 1, 1);
+		touchCart(cart);
+		return { ok: true, removed, cart, deleted: true };
+	}
+
+	const target = cart.items[lineNumber - 1];
+	target.quantity = quantity;
+	touchCart(cart);
+	return { ok: true, item: target, cart };
+}
+
+function adjustItemQuantityByLine(chatId, lineNumber, delta) {
+	const cart = carts.get(chatId);
+	if (!cart || cart.items.length === 0) {
+		return { ok: false, error: "Giỏ hàng đang trống." };
+	}
+
+	if (!Number.isInteger(lineNumber) || lineNumber <= 0 || lineNumber > cart.items.length) {
+		return { ok: false, error: "Số dòng không hợp lệ. Dùng /cart để xem lại số thứ tự." };
+	}
+
+	if (!Number.isInteger(delta) || delta === 0) {
+		return { ok: false, error: "Mức thay đổi số lượng không hợp lệ." };
+	}
+
+	const target = cart.items[lineNumber - 1];
+	const nextQuantity = Number(target.quantity || 0) + delta;
+	if (nextQuantity <= 0) {
+		const [removed] = cart.items.splice(lineNumber - 1, 1);
+		touchCart(cart);
+		return { ok: true, removed, cart, deleted: true };
+	}
+
+	target.quantity = nextQuantity;
+	touchCart(cart);
+	return { ok: true, item: target, cart };
+}
+
 function clearCart(chatId) {
 	carts.delete(chatId);
 }
@@ -80,6 +133,8 @@ module.exports = {
 	getOrCreateCart,
 	addItem,
 	removeItemByLine,
+	updateItemQuantityByLine,
+	adjustItemQuantityByLine,
 	clearCart,
 	isCartEmpty,
 	getCartTotal,

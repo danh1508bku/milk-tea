@@ -33,6 +33,30 @@ function getDeliveryMethodKeyboard() {
   };
 }
 
+function buildCartAdjustKeyboard(cart) {
+  const items = cart && Array.isArray(cart.items) ? cart.items : [];
+  if (items.length === 0) {
+    return null;
+  }
+
+  const rows = items.map((item, index) => {
+    const line = index + 1;
+    return [
+      { text: `➖ ${line}`, callback_data: `ct:dec:${line}` },
+      { text: `${line}. ${item.name} x${item.quantity || 0}`, callback_data: `ct:noop:${line}` },
+      { text: `➕ ${line}`, callback_data: `ct:inc:${line}` },
+    ];
+  });
+
+  rows.push([{ text: "Làm mới giỏ", callback_data: "ct:refresh" }]);
+
+  return {
+    reply_markup: {
+      inline_keyboard: rows,
+    },
+  };
+}
+
 function getAdminKeyboard() {
   return {
     reply_markup: {
@@ -1062,7 +1086,18 @@ function setupBotHandlers(bot, services) {
 
   async function sendCart(chatId) {
     const cart = getCartOrEmpty(chatId);
-    const message = buildCartMessage(cart);
+    const message = [
+      buildCartMessage(cart),
+      "",
+      "Mẹo: bấm nút ➕/➖ để chỉnh số lượng nhanh hoặc dùng /qty <so_dong> <so_luong> (nhập 0 để xóa món).",
+    ].join("\n");
+    const adjustKeyboard = buildCartAdjustKeyboard(cart);
+
+    if (adjustKeyboard) {
+      await bot.sendMessage(chatId, message, adjustKeyboard);
+      return;
+    }
+
     await bot.sendMessage(chatId, message, getMainKeyboard());
   }
 
@@ -1426,6 +1461,38 @@ function setupBotHandlers(bot, services) {
     }
 
     await bot.sendMessage(chatId, `Da xoa dong ${lineNumber}: ${result.removed.name}.`);
+    await sendCart(chatId);
+  }));
+
+  bot.onText(/^\/qty(?:\s+(\d+))?(?:\s+(\d+))?$/i, safe(async (msg, match) => {
+    const chatId = msg.chat.id;
+    const lineText = match && match[1] ? match[1] : "";
+    const quantityText = match && match[2] ? match[2] : "";
+    logCommand(chatId, "/qty", `${lineText} ${quantityText}`.trim());
+
+    if (await denyBuyerFlowForAdmin(chatId)) {
+      return;
+    }
+
+    if (!lineText || !quantityText) {
+      await bot.sendMessage(chatId, "Sai cu phap. Dung: /qty <so_dong> <so_luong>. Vi du: /qty 1 3 (hoac /qty 1 0 de xoa)");
+      return;
+    }
+
+    const lineNumber = Number.parseInt(lineText, 10);
+    const quantity = Number.parseInt(quantityText, 10);
+    const updated = cartService.updateItemQuantityByLine(chatId, lineNumber, quantity);
+
+    if (!updated.ok) {
+      await bot.sendMessage(chatId, updated.error);
+      return;
+    }
+
+    if (updated.deleted && updated.removed) {
+      await bot.sendMessage(chatId, `Da xoa dong ${lineNumber}: ${updated.removed.name}.`);
+    } else {
+      await bot.sendMessage(chatId, `Da cap nhat dong ${lineNumber}: ${updated.item.name} x ${updated.item.quantity}.`);
+    }
     await sendCart(chatId);
   }));
 
@@ -1833,8 +1900,70 @@ function setupBotHandlers(bot, services) {
     const data = String(query.data || "");
     const messageId = query && query.message ? query.message.message_id : null;
 
-    if (!chatId || (!data.startsWith("lf:") && !data.startsWith("ad:") && !data.startsWith("pm:"))) {
+    if (!chatId || (!data.startsWith("lf:") && !data.startsWith("ad:") && !data.startsWith("pm:") && !data.startsWith("ct:"))) {
       return;
+    }
+
+    if (data.startsWith("ct:")) {
+      if (isAdminChat(chatId)) {
+        await bot.answerCallbackQuery(query.id, { text: "Admin khong dung gio mua hang.", show_alert: false });
+        return;
+      }
+
+      try {
+        const parts = data.split(":");
+        const action = parts[1] || "";
+        const line = Number.parseInt(parts[2], 10);
+
+        if (action === "noop") {
+          await bot.answerCallbackQuery(query.id);
+          return;
+        }
+
+        if (action === "refresh") {
+          await bot.answerCallbackQuery(query.id, { text: "Da lam moi gio" });
+          await sendCart(chatId);
+          return;
+        }
+
+        if (action === "inc" || action === "dec") {
+          const delta = action === "inc" ? 1 : -1;
+          const updated = cartService.adjustItemQuantityByLine(chatId, line, delta);
+
+          if (!updated.ok) {
+            await bot.answerCallbackQuery(query.id, { text: updated.error, show_alert: true });
+            return;
+          }
+
+          if (updated.deleted && updated.removed) {
+            await bot.answerCallbackQuery(query.id, {
+              text: `Da xoa ${updated.removed.name} khoi gio`,
+            });
+          } else {
+            await bot.answerCallbackQuery(query.id, {
+              text: `${updated.item.name} x ${updated.item.quantity}`,
+            });
+          }
+          await sendCart(chatId);
+          return;
+        }
+
+        await bot.answerCallbackQuery(query.id);
+        return;
+      } catch (error) {
+        logEvent("CART_CALLBACK_ERROR", {
+          chatId,
+          data,
+          message: error.message,
+          stack: error.stack,
+        });
+        try {
+          await bot.answerCallbackQuery(query.id, { text: "Da co loi, vui long thu lai." });
+        } catch (callbackError) {
+          logEvent("CALLBACK_ANSWER_FAILED", { chatId, reason: callbackError.message });
+        }
+        return;
+      }
     }
 
     if (data.startsWith("pm:")) {
