@@ -23,6 +23,16 @@ function getMainKeyboard() {
   };
 }
 
+function getDeliveryMethodKeyboard() {
+  return {
+    reply_markup: {
+      keyboard: [["Pickup", "Delivery"]],
+      resize_keyboard: true,
+      one_time_keyboard: true,
+    },
+  };
+}
+
 function getAdminKeyboard() {
   return {
     reply_markup: {
@@ -1093,14 +1103,14 @@ function setupBotHandlers(bot, services) {
 
         sessionService.mergeData(chatId, { phone: normalized });
         sessionService.setState(chatId, STATES.WAITING_DELIVERY_METHOD);
-        await bot.sendMessage(chatId, "Chon hinh thuc nhan hang: pickup hoac delivery");
+        await bot.sendMessage(chatId, "Chon hinh thuc nhan hang:", getDeliveryMethodKeyboard());
         return;
       }
 
       case STATES.WAITING_DELIVERY_METHOD: {
         const deliveryMethod = normalizeDeliveryMethod(text);
         if (!deliveryMethod) {
-          await bot.sendMessage(chatId, "Chi chap nhan pickup hoac delivery. Vui long nhap lai.");
+          await bot.sendMessage(chatId, "Chi chap nhan pickup hoac delivery. Vui long chon bang nut ben duoi.", getDeliveryMethodKeyboard());
           return;
         }
 
@@ -2410,7 +2420,17 @@ function setupBotHandlers(bot, services) {
       return;
     }
 
+    if (isAdminChat(chatId) && text === "Chọn món khác") {
+      await denyBuyerFlowForAdmin(chatId);
+      return;
+    }
+
     if (text === "Xem menu") {
+      await sendMenu(chatId);
+      return;
+    }
+
+    if (text === "Chọn món khác") {
       await sendMenu(chatId);
       return;
     }

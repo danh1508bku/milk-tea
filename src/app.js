@@ -77,12 +77,11 @@ async function startApp() {
     adminChatId,
   });
 
-  const buyerMainKeyboard = {
+  const buyerQuickKeyboard = {
     reply_markup: {
       keyboard: [
-        ["Xem menu", "Xem giỏ hàng"],
-        ["Checkout", "/help"],
-        ["Chế độ LIST", "Chế độ AI"],
+        ["Chọn món khác"],
+        ["Xem giỏ hàng", "Checkout"],
       ],
       resize_keyboard: true,
     },
@@ -121,7 +120,7 @@ async function startApp() {
         `Thanh toan PayOS thanh cong cho don ${updated.orderCode}.`,
         "Ban co the tiep tuc chon mon khac hoac xem gio hang.",
       ].join("\n"),
-      buyerMainKeyboard
+      buyerQuickKeyboard
     );
 
     if (adminChatId && String(adminChatId) !== String(updated.chatId)) {
